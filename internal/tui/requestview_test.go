@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -118,6 +119,124 @@ func TestRequestModel_BackEmitsBackToBrowserMsg(t *testing.T) {
 	}
 }
 
+func TestRequestModel_ExecResultMsgScrollsToResponseStart(t *testing.T) {
+	req := httpfile.Request{
+		Method: "GET",
+		URL:    "https://example.com/users/1",
+		Headers: []httpfile.Header{
+			{Name: "Accept", Value: "application/json"},
+			{Name: "Authorization", Value: "Bearer token"},
+			{Name: "X-Trace-Id", Value: "abc123"},
+		},
+	}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	if m.responseLineOffset == 0 {
+		t.Fatal("expected responseLineOffset to be past the request header lines")
+	}
+
+	// Simulate the user having manually scrolled up into the request section
+	// while a previous response was showing.
+	m.viewport.SetYOffset(1)
+
+	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: "line1\nline2\nline3\nline4\nline5"}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	if m.viewport.YOffset != m.responseLineOffset {
+		t.Errorf("YOffset = %d, want responseLineOffset %d", m.viewport.YOffset, m.responseLineOffset)
+	}
+}
+
+func TestRequestModel_SendScrollsToResponseStartImmediately(t *testing.T) {
+	req := httpfile.Request{
+		Method: "GET",
+		URL:    "https://example.com/users/1",
+		Headers: []httpfile.Header{
+			{Name: "Accept", Value: "application/json"},
+			{Name: "Authorization", Value: "Bearer token"},
+		},
+	}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	// Pretend a prior response was showing and the user had scrolled into it.
+	m.viewport.SetYOffset(1)
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.executing {
+		t.Error("expected executing = true after Send")
+	}
+	if cmd == nil {
+		t.Fatal("expected a send command")
+	}
+	if m.viewport.YOffset != m.responseLineOffset {
+		t.Errorf("YOffset = %d, want responseLineOffset %d", m.viewport.YOffset, m.responseLineOffset)
+	}
+}
+
+func TestRequestModel_SetSizePreservesScrollPosition(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com/users/1"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	body := strings.Repeat("line\n", 50)
+	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: body}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	m.viewport.SetYOffset(3)
+
+	m = m.SetSize(80, 24)
+
+	if m.viewport.YOffset != 3 {
+		t.Errorf("YOffset after SetSize = %d, want 3 (scroll position should be preserved)", m.viewport.YOffset)
+	}
+}
+
+func TestRequestModel_CycleEnvPreservesScrollPosition(t *testing.T) {
+	dir := t.TempDir()
+	envJSON := `{
+		"dev":  {"baseUrl": "https://dev.example.com"},
+		"prod": {"baseUrl": "https://example.com"}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "http-client.env.json"), []byte(envJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	req := httpfile.Request{Method: "GET", URL: "{{baseUrl}}/ping"}
+
+	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+
+	body := strings.Repeat("line\n", 50)
+	entry := history.Entry{Method: "GET", URL: "https://dev.example.com/ping", StatusCode: 200, ResponseBody: body}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	m.viewport.SetYOffset(3)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+
+	if m.viewport.YOffset != 3 {
+		t.Errorf("YOffset after CycleEnv = %d, want 3 (scroll position should be preserved)", m.viewport.YOffset)
+	}
+}
+
+func TestRequestModel_BuildContentResponseOffsetPointsPastDivider(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	content, offset := m.buildContent()
+	lines := strings.Split(content, "\n")
+
+	if offset <= 0 || offset >= len(lines) {
+		t.Fatalf("offset = %d out of range for %d lines", offset, len(lines))
+	}
+	if !strings.Contains(lines[offset-2], "─") {
+		t.Errorf("lines[offset-2] = %q, want it to contain the divider", lines[offset-2])
+	}
+	if lines[offset-1] != "" {
+		t.Errorf("lines[offset-1] = %q, want a blank line before the response section", lines[offset-1])
+	}
+	if strings.Contains(lines[offset], "─") {
+		t.Errorf("lines[offset] = %q, want the response section, not the divider", lines[offset])
+	}
+}
+
 func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -134,6 +253,9 @@ func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
 	}
 	if !m.executing {
 		t.Error("expected executing=true immediately for a rerun")
+	}
+	if m.viewport.YOffset != m.responseLineOffset {
+		t.Errorf("YOffset = %d, want responseLineOffset %d", m.viewport.YOffset, m.responseLineOffset)
 	}
 	if cmd == nil {
 		t.Fatal("expected a send command")

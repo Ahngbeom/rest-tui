@@ -48,8 +48,9 @@ type requestModel struct {
 	lastEntry   *history.Entry
 	historyWarn string
 
-	viewport      viewport.Model
-	width, height int
+	viewport           viewport.Model
+	responseLineOffset int
+	width, height      int
 
 	store *history.Store
 }
@@ -92,6 +93,7 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 	m.recompute()
 	m.executing = true
 	m.refreshContent()
+	m.scrollToResponse()
 	return m, m.sendCmd()
 }
 
@@ -110,7 +112,18 @@ func (m *requestModel) recompute() {
 }
 
 func (m *requestModel) refreshContent() {
-	m.viewport.SetContent(m.buildContent())
+	content, responseOffset := m.buildContent()
+	m.viewport.SetContent(content)
+	m.responseLineOffset = responseOffset
+}
+
+// scrollToResponse forces the viewport to the line where the response
+// section begins (just below the divider), discarding any prior manual
+// scroll position. Call this only at the moments a fresh response should
+// take over the view — never from refreshContent, so that resizes and env
+// cycling don't disturb wherever the user was reading.
+func (m *requestModel) scrollToResponse() {
+	m.viewport.SetYOffset(m.responseLineOffset)
 }
 
 func (m requestModel) SetSize(width, height int) requestModel {
@@ -170,6 +183,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		m.lastEntry = &entry
 		m.historyWarn = msg.historyWarn
 		m.refreshContent()
+		m.scrollToResponse()
 		return m, nil
 	case tea.KeyMsg:
 		switch {
@@ -185,6 +199,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			}
 			m.executing = true
 			m.refreshContent()
+			m.scrollToResponse()
 			return m, m.sendCmd()
 		case key.Matches(msg, keys.Back):
 			return m, func() tea.Msg { return backToBrowserMsg{} }
@@ -196,7 +211,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m requestModel) buildContent() string {
+func (m requestModel) buildContent() (string, int) {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "%s %s\n", m.resolved.Method, m.resolved.URL)
@@ -218,6 +233,8 @@ func (m requestModel) buildContent() string {
 	b.WriteString(mutedTextStyle.Render(strings.Repeat("─", 40)))
 	b.WriteString("\n\n")
 
+	responseOffset := strings.Count(b.String(), "\n")
+
 	switch {
 	case m.executing:
 		b.WriteString("Sending request...")
@@ -234,7 +251,7 @@ func (m requestModel) buildContent() string {
 		b.WriteString(mutedTextStyle.Render(m.historyWarn))
 	}
 
-	return b.String()
+	return b.String(), responseOffset
 }
 
 func (m requestModel) envLine() string {
