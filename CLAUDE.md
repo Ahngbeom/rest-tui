@@ -8,14 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- Build: `go build ./...` (or `go build -o rest-tui .` to reproduce the checked-in binary)
+- Build: `go build ./...` to compile-check; run `scripts/build.sh` to rebuild and atomically replace the checked-in `rest-tui` binary with the current source (runs `go vet ./...` first, then builds to a temp file and `mv`s it into place only on success). `go build -o rest-tui .` still works directly if you don't need the vet gate or the summary output.
 - Run: `go run . -dir <path-to-http-files>`
 - Test all: `go test ./...`
 - Test a single test: `go test ./internal/httpfile/ -run TestParse_SingleRequestNoDelimiter` (package path + `-run <TestName>`, plain `testing` package, no test runner config)
 - Format: `gofmt -l .` to check, `gofmt -w .` to fix
 - Vet: `go vet ./...`
 
-There is no CI config, Makefile, or linter config in this repo — the commands above are the full toolchain.
+There is no CI config, Makefile, or linter config in this repo — `scripts/build.sh` plus the commands above are the full toolchain.
 
 ## Architecture
 
