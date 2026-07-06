@@ -4,18 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`rest-tui` (module `github.com/bahn/rest-tui`) is a full-screen terminal app, built with Bubble Tea, for browsing and running IntelliJ HTTP Client `.http` scratch files without leaving the terminal. Entry point: `main.go`, flags `-dir` (directory to scan for `.http` files, default `.`) and `-config` (history file path, default `~/.config/rest-tui/history.json`).
+`rest-tui` (module `github.com/Ahngbeom/rest-tui`) is a full-screen terminal app, built with Bubble Tea, for browsing and running IntelliJ HTTP Client `.http` scratch files without leaving the terminal. Entry point: `main.go`, flags `-dir` (directory to scan for `.http` files, default `.`), `-config` (history file path, default `~/.config/rest-tui/history.json`), and `-version` (print version and exit). See `README.md` for install/usage docs aimed at end users.
 
 ## Commands
 
-- Build: `go build ./...` to compile-check; run `scripts/build.sh` to rebuild and atomically replace the checked-in `rest-tui` binary with the current source (runs `go vet ./...` first, then builds to a temp file and `mv`s it into place only on success). `go build -o rest-tui .` still works directly if you don't need the vet gate or the summary output.
+- Build: `go build ./...` to compile-check; run `scripts/build.sh` to rebuild and atomically replace the checked-in `rest-tui` binary with the current source (runs `go vet ./...` first, then builds to a temp file and `mv`s it into place only on success). `go build -o rest-tui .` still works directly if you don't need the vet gate or the summary output. The compiled `rest-tui` binary is committed to git (not in `.gitignore`), so a diff on it after rebuilding is expected, not a mistake.
 - Run: `go run . -dir <path-to-http-files>`
 - Test all: `go test ./...`
 - Test a single test: `go test ./internal/httpfile/ -run TestParse_SingleRequestNoDelimiter` (package path + `-run <TestName>`, plain `testing` package, no test runner config)
 - Format: `gofmt -l .` to check, `gofmt -w .` to fix
 - Vet: `go vet ./...`
 
-There is no CI config, Makefile, or linter config in this repo — `scripts/build.sh` plus the commands above are the full toolchain.
+There is no Makefile or linter config in this repo — `scripts/build.sh` plus the commands above are the full local dev toolchain.
+
+## Releases
+
+Pushing a `v*` tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which runs [goreleaser](https://goreleaser.com) (config: `.goreleaser.yaml`) to cross-compile `rest-tui` for linux/darwin/windows × amd64/arm64, publish archives + checksums to GitHub Releases, and push an updated formula to the `Ahngbeom/homebrew-tap` repo. The version string is injected into the `main.version` var via `-ldflags`, surfaced through the `-version` flag. This is the only CI in the repo — there's no test/lint workflow, only release-on-tag.
 
 ## Architecture
 
@@ -27,7 +31,7 @@ MVU (Elm-architecture) design via Bubble Tea, with HTTP parsing/execution kept i
 - `internal/output/` — formats response bodies (JSON indent + ANSI color via `tidwall/pretty`), UI-framework-agnostic.
 - `internal/history/` — appends/lists executions as a single JSON array file (`store.go`). Self-heals from a corrupted history file by renaming it to `.corrupted-<timestamp>` and surfacing the warning via `Store.Warning()` / `App.statusMsg` rather than crashing.
 - `internal/tui/` — the Bubble Tea app:
-  - `app.go` — root model. Owns a `screen` enum (`screenBrowser`, `screenRequest`, `screenHistory`) and one sub-model per screen. `App.Update` intercepts global keys/messages first, then delegates the `tea.Msg` to whichever sub-model is active.
+  - `app.go` — root model. Owns a `screen` enum (`screenBrowser`, `screenRequest`, `screenHistory`) and one sub-model per screen. `App.Update` intercepts global keys/messages first, then delegates the `tea.Msg` to whichever sub-model is active. Also renders the header/breadcrumb, footer hints, and help overlay (`breadcrumb()`, `footerHints()`, `helpView()`), and computes the vertical space left for the active sub-model via `contentHeight()`.
   - `browser.go` — two-pane file/request picker; `browserModel.focus` (`paneFiles`/`paneRequests`) tracks which `list.Model` pane has keyboard focus (Tab/Esc to switch), styled via `paneFocusedStyle` vs `paneStyle`.
   - `requestview.go` — variable resolution display, send, and response rendering. Async send is done via a `tea.Cmd` closure (`sendCmd`) that performs the HTTP call + history append off the update loop and returns `execResultMsg`.
   - `historyview.go` — list + detail view of past executions; supports rerun via `newRequestModelFromEntry`, which builds the model and returns a `tea.Cmd` to immediately resend.
