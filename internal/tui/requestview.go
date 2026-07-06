@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Ahngbeom/rest-tui/internal/env"
 	"github.com/Ahngbeom/rest-tui/internal/executor"
@@ -128,8 +128,8 @@ func (m *requestModel) scrollToResponse() {
 
 func (m requestModel) SetSize(width, height int) requestModel {
 	m.width, m.height = width, height
-	innerWidth := width - 4    // rounded border + horizontal padding
-	innerHeight := height - 3  // border rows (2) + fixed env line (1)
+	innerWidth := width - 4   // rounded border + horizontal padding
+	innerHeight := height - 3 // border rows (2) + fixed env line (1)
 	if innerWidth < 0 {
 		innerWidth = 0
 	}
