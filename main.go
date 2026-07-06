@@ -14,6 +14,9 @@ import (
 	"github.com/Ahngbeom/rest-tui/internal/tui"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func defaultHistoryPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -30,7 +33,13 @@ func main() {
 
 	dir := flag.String("dir", ".", "directory to search for .http files")
 	historyPath := flag.String("config", defaultHistory, "path to the history file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("rest-tui", version)
+		return
+	}
 
 	root, err := filepath.Abs(*dir)
 	if err != nil {
