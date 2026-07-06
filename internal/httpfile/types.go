@@ -25,6 +25,10 @@ type File struct {
 	// Vars holds file-scoped variables declared via bare `@name = value` lines.
 	Vars     map[string]string
 	Requests []Request
+	// ParseErrors lists blocks that failed to parse. Requests still contains
+	// every block that parsed successfully — one bad block does not hide
+	// the rest of the file.
+	ParseErrors []*ParseError
 }
 
 // ParseError reports a malformed .http file with the source line it occurred on.

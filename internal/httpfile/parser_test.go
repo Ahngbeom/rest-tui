@@ -205,3 +205,28 @@ func TestParse_UnknownMethodIsError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestParse_OneBadBlockDoesNotHideOthers(t *testing.T) {
+	src := `### Get user
+GET {{baseUrl}}/users/1
+
+### Broken
+Content-Type: application/json
+
+### Create user
+POST {{baseUrl}}/users
+`
+	f, err := Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for the broken block, got nil")
+	}
+	if len(f.ParseErrors) != 1 {
+		t.Fatalf("expected 1 ParseErrors, got %d: %v", len(f.ParseErrors), f.ParseErrors)
+	}
+	if len(f.Requests) != 2 {
+		t.Fatalf("expected 2 valid requests despite the broken block, got %d", len(f.Requests))
+	}
+	if f.Requests[0].Name != "Get user" || f.Requests[1].Name != "Create user" {
+		t.Errorf("requests = %+v", f.Requests)
+	}
+}

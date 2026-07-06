@@ -12,6 +12,10 @@ var knownMethods = map[string]bool{
 // Parse reads an IntelliJ HTTP Client (.http) scratch file and returns its
 // file-scoped variables and request blocks. Blocks are separated by lines
 // starting with "###"; a file with no such line is treated as a single block.
+// A block that fails to parse is skipped rather than aborting the whole
+// file: its error is recorded in File.ParseErrors, and every other block
+// still parses normally. The first recorded error (if any) is also
+// returned as err for callers that only care whether something went wrong.
 func Parse(data []byte) (*File, error) {
 	lines := strings.Split(string(data), "\n")
 
@@ -45,17 +49,23 @@ func Parse(data []byte) (*File, error) {
 		}
 
 		if err := parseBlock(f, block, bodyOffset, delimiterName); err != nil {
-			return nil, err
+			f.ParseErrors = append(f.ParseErrors, err)
 		}
 	}
 
-	return f, nil
+	var firstErr error
+	if len(f.ParseErrors) > 0 {
+		firstErr = f.ParseErrors[0]
+	}
+	return f, firstErr
 }
 
 // parseBlock parses one ###-delimited section (with the "###" line itself
 // already stripped) and, if it contains a request, appends it to f.Requests.
-// lineOffset is the 0-based source line number of block[0].
-func parseBlock(f *File, block []string, lineOffset int, delimiterName string) error {
+// lineOffset is the 0-based source line number of block[0]. On failure it
+// returns the error without touching f.Requests for this block; the caller
+// is expected to record it and move on to the next block.
+func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *ParseError {
 	name := delimiterName
 	var req *Request
 	i := 0
