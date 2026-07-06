@@ -12,7 +12,7 @@ echo "[build.sh] go vet ./..."
 go vet ./...
 
 echo "[build.sh] building..."
-go build -o rest-tui.new .
+go build -trimpath -o rest-tui.new .
 mv rest-tui.new rest-tui
 
 commit="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
