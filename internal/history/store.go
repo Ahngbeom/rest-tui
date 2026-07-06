@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 // Entry is one recorded execution.

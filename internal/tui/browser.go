@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 // discoverHTTPFiles recursively finds *.http files under root and returns

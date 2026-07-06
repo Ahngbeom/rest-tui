@@ -1,4 +1,4 @@
-module github.com/bahn/rest-tui
+module github.com/Ahngbeom/rest-tui
 
 go 1.26.4
 

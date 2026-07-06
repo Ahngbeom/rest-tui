@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 // Response is the captured result of executing a request.

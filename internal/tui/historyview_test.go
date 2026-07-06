@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bahn/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/history"
 )
 
 func TestHistoryModel_RefreshPopulatesListMostRecentFirst(t *testing.T) {

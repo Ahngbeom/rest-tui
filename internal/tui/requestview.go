@@ -11,11 +11,11 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 
-	"github.com/bahn/rest-tui/internal/env"
-	"github.com/bahn/rest-tui/internal/executor"
-	"github.com/bahn/rest-tui/internal/history"
-	"github.com/bahn/rest-tui/internal/httpfile"
-	"github.com/bahn/rest-tui/internal/output"
+	"github.com/Ahngbeom/rest-tui/internal/env"
+	"github.com/Ahngbeom/rest-tui/internal/executor"
+	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
 const requestTimeout = 30 * time.Second

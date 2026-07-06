@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bahn/rest-tui/internal/executor"
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/executor"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 func TestRenderResponse_FullExample(t *testing.T) {

@@ -3,7 +3,7 @@ package env
 import (
 	"sort"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 // ResolveRequest substitutes {{var}} placeholders in req's URL, header

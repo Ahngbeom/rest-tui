@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 func TestResolveRequest_SubstitutesAllParts(t *testing.T) {

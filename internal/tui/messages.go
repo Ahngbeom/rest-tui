@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"github.com/bahn/rest-tui/internal/history"
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 // openRequestMsg asks the app to switch to the Request view for a request

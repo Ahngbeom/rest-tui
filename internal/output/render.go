@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bahn/rest-tui/internal/executor"
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/executor"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 	"github.com/tidwall/pretty"
 )
 

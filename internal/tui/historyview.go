@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bahn/rest-tui/internal/history"
-	"github.com/bahn/rest-tui/internal/output"
+	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
 type historyMode int

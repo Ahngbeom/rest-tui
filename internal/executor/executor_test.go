@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bahn/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 func TestExecute_GetCapturesStatusHeadersAndBody(t *testing.T) {
