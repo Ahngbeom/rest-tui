@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -88,5 +89,30 @@ func TestApp_HelpKeyTogglesShowHelp(t *testing.T) {
 	a = model.(App)
 	if a.showHelp {
 		t.Error("expected showHelp = false after pressing ? again")
+	}
+}
+
+func TestApp_SurfacesHistoryCorruptionWarningAfterDetection(t *testing.T) {
+	dir := t.TempDir()
+	histPath := filepath.Join(t.TempDir(), "history.json")
+	if err := os.WriteFile(histPath, []byte("{ not valid json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	store := history.NewStore(histPath)
+	a := NewApp(dir, store)
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	if a.statusMsg != "" {
+		t.Fatalf("statusMsg = %q, want empty before anything has read the history file", a.statusMsg)
+	}
+
+	// "h" jumps to the History screen, which calls store.List -> load(),
+	// discovering the corruption for the first time.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	a = model.(App)
+
+	if a.statusMsg == "" {
+		t.Fatal("expected statusMsg to surface the corruption warning once History has loaded")
 	}
 }

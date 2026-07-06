@@ -50,9 +50,6 @@ func NewApp(root string, store *history.Store) App {
 	a := App{root: root, store: store}
 	a.browser = newBrowserModel(root)
 	a.history = newHistoryModel(store)
-	if w := store.Warning(); w != "" {
-		a.statusMsg = w
-	}
 	return a
 }
 
@@ -66,6 +63,17 @@ func (a App) contentHeight() int {
 		h = 0
 	}
 	return h
+}
+
+// applyStoreWarning copies any newly-detected history store warning (e.g. a
+// corrupted file being backed up) into the status line. Corruption is only
+// discovered lazily, the first time something actually reads the history
+// file, so this is checked here rather than once at startup.
+func (a App) applyStoreWarning() App {
+	if w := a.store.Warning(); w != "" {
+		a.statusMsg = w
+	}
+	return a
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -88,7 +96,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.ToggleLog):
 			a.screen = screenHistory
 			a.history = a.history.refresh()
-			return a, nil
+			return a.applyStoreWarning(), nil
 		}
 
 	case openRequestMsg:
@@ -111,7 +119,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openHistoryMsg:
 		a.screen = screenHistory
 		a.history = a.history.refresh()
-		return a, nil
+		return a.applyStoreWarning(), nil
 	}
 
 	var cmd tea.Cmd
@@ -123,7 +131,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenHistory:
 		a.history, cmd = a.history.Update(msg)
 	}
-	return a, cmd
+	return a.applyStoreWarning(), cmd
 }
 
 func (a App) breadcrumb() string {
