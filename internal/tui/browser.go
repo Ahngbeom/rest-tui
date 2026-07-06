@@ -130,7 +130,10 @@ func (m browserModel) SetSize(width, height int) browserModel {
 }
 
 // selectFile parses the currently highlighted file in the files pane and, on
-// success, populates the requests pane and moves focus to it.
+// success, populates the requests pane and moves focus to it. A file that
+// fails to parse entirely (I/O error, or every block malformed) leaves focus
+// on the files pane; a file where only some blocks fail still populates the
+// requests pane with whatever parsed successfully.
 func (m browserModel) selectFile() browserModel {
 	item, ok := m.files.SelectedItem().(fileItem)
 	if !ok {
@@ -147,21 +150,19 @@ func (m browserModel) selectFile() browserModel {
 		return m
 	}
 
-	f, err := httpfile.Parse(data)
-	if err != nil {
-		m.parseErr = err
-		m.parsedFile = nil
-		m.requests.SetItems(nil)
-		return m
-	}
-
-	m.parseErr = nil
+	f, parseErr := httpfile.Parse(data)
 	m.parsedFile = f
 	items := make([]list.Item, len(f.Requests))
 	for i, r := range f.Requests {
 		items[i] = requestItem{req: r}
 	}
 	m.requests.SetItems(items)
+
+	if len(f.Requests) == 0 {
+		m.parseErr = parseErr
+		return m
+	}
+	m.parseErr = nil
 	m.focus = paneRequests
 	return m
 }
@@ -214,8 +215,11 @@ func (m browserModel) View() string {
 	}
 
 	right := m.requests.View()
-	if m.parseErr != nil {
+	switch {
+	case m.parseErr != nil:
 		right = errorTextStyle.Render("parse error:\n" + m.parseErr.Error())
+	case m.parsedFile != nil && len(m.parsedFile.ParseErrors) > 0:
+		right = errorTextStyle.Render("parse warning: "+joinParseErrors(m.parsedFile.ParseErrors)) + "\n\n" + right
 	}
 
 	return lipgloss.JoinHorizontal(
@@ -223,4 +227,14 @@ func (m browserModel) View() string {
 		filesPane.Render(m.files.View()),
 		requestsPane.Render(right),
 	)
+}
+
+// joinParseErrors formats the blocks that failed to parse as a single
+// semicolon-separated line for the warning banner above the requests pane.
+func joinParseErrors(errs []*httpfile.ParseError) string {
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Error()
+	}
+	return strings.Join(msgs, "; ")
 }

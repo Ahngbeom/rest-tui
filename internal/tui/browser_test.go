@@ -110,3 +110,24 @@ func TestBrowserModel_EnterOnRequestEmitsOpenRequestMsg(t *testing.T) {
 		t.Errorf("req.Method = %q, want GET", msg.req.Method)
 	}
 }
+
+func TestBrowserModel_SelectFile_PartialParseErrorsStillShowValidRequests(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "mixed.http", "### Get user\nGET https://example.com/users/1\n\n### Broken\nContent-Type: application/json\n\n### Create user\nPOST https://example.com/users\n")
+
+	m := newBrowserModel(dir)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.focus != paneRequests {
+		t.Fatalf("focus = %v, want paneRequests despite one broken block", m.focus)
+	}
+	if m.parseErr != nil {
+		t.Fatalf("parseErr = %v, want nil when some requests parsed successfully", m.parseErr)
+	}
+	if m.parsedFile == nil || len(m.parsedFile.ParseErrors) != 1 {
+		t.Fatalf("parsedFile.ParseErrors = %v, want 1 entry for the broken block", m.parsedFile.ParseErrors)
+	}
+	if len(m.requests.Items()) != 2 {
+		t.Fatalf("requests.Items() = %d, want 2 valid requests", len(m.requests.Items()))
+	}
+}
