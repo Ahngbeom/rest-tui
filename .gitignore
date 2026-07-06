@@ -1,3 +1,4 @@
 *.test
 *.out
 rest-tui.new
+dist/

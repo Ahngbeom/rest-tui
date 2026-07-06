@@ -1,0 +1,53 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: rest-tui
+    binary: rest-tui
+    main: .
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: rest-tui
+    ids:
+      - rest-tui
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: rest-tui
+    repository:
+      owner: Ahngbeom
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/Ahngbeom/rest-tui"
+    description: "Terminal UI for browsing and running IntelliJ HTTP Client .http scratch files"
+    license: "MIT"
+    install: |
+      bin.install "rest-tui"
