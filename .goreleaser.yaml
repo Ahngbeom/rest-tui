@@ -49,6 +49,7 @@ brews:
       owner: Ahngbeom
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
     homepage: "https://github.com/Ahngbeom/rest-tui"
     description: "Terminal UI for browsing and running IntelliJ HTTP Client .http scratch files"
     license: "MIT"
