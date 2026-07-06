@@ -3,6 +3,7 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,5 +166,31 @@ func TestStore_RequestAndResponseFieldsRoundTrip(t *testing.T) {
 	}
 	if len(got.RequestHeaders) != 1 || got.RequestHeaders[0].Name != "Content-Type" {
 		t.Errorf("RequestHeaders = %v", got.RequestHeaders)
+	}
+}
+
+func TestStore_WarningIsSafeForConcurrentAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	if err := os.WriteFile(path, []byte("{ not valid json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	s := NewStore(path)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.List(0)
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			s.Warning()
+		}
+	}()
+	wg.Wait()
+
+	if s.Warning() == "" {
+		t.Error("expected a non-empty recovery warning after concurrent access")
 	}
 }

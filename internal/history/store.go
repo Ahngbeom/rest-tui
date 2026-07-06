@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
@@ -32,7 +33,9 @@ type Entry struct {
 
 // Store reads and appends Entry records to a JSON file on disk.
 type Store struct {
-	path    string
+	path string
+
+	mu      sync.Mutex
 	warning string
 }
 
@@ -44,8 +47,13 @@ func NewStore(path string) *Store {
 
 // Warning returns a human-readable message describing the most recent
 // recovery action (e.g. a corrupted history file being backed up and
-// replaced), or "" if nothing noteworthy happened.
+// replaced), or "" if nothing noteworthy happened. Safe to call
+// concurrently with Append/List/Get, which may run on a different
+// goroutine (e.g. a request send in flight via a tea.Cmd) while Warning is
+// polled from the main update loop.
 func (s *Store) Warning() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.warning
 }
 
@@ -121,7 +129,9 @@ func (s *Store) load() ([]Entry, error) {
 		if renameErr := os.Rename(s.path, backupPath); renameErr != nil {
 			return nil, fmt.Errorf("history file %s is corrupted (%w) and could not be backed up: %v", s.path, err, renameErr)
 		}
+		s.mu.Lock()
 		s.warning = fmt.Sprintf("history file was corrupted; backed up to %s and started fresh", backupPath)
+		s.mu.Unlock()
 		return nil, nil
 	}
 	return entries, nil
