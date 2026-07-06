@@ -151,18 +151,24 @@ func (m browserModel) selectFile() browserModel {
 	}
 
 	f, parseErr := httpfile.Parse(data)
-	m.parsedFile = f
 	items := make([]list.Item, len(f.Requests))
 	for i, r := range f.Requests {
 		items[i] = requestItem{req: r}
 	}
 	m.requests.SetItems(items)
 
-	if len(f.Requests) == 0 {
+	if len(f.Requests) == 0 && parseErr != nil {
+		// Every block failed to parse: nothing to show.
 		m.parseErr = parseErr
+		m.parsedFile = nil
 		return m
 	}
+
+	// Either some/all requests parsed, or the file legitimately has none
+	// (empty/comment-only) with no errors at all -- either way, focus moves
+	// to the requests pane, same as before this task's change.
 	m.parseErr = nil
+	m.parsedFile = f
 	m.focus = paneRequests
 	return m
 }

@@ -131,3 +131,21 @@ func TestBrowserModel_SelectFile_PartialParseErrorsStillShowValidRequests(t *tes
 		t.Fatalf("requests.Items() = %d, want 2 valid requests", len(m.requests.Items()))
 	}
 }
+
+func TestBrowserModel_SelectFile_EmptyFileMovesFocusWithNoError(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "empty.http", "# just a comment, no requests\n")
+
+	m := newBrowserModel(dir)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.focus != paneRequests {
+		t.Fatalf("focus = %v, want paneRequests for a file with no errors and no requests", m.focus)
+	}
+	if m.parseErr != nil {
+		t.Fatalf("parseErr = %v, want nil", m.parseErr)
+	}
+	if len(m.requests.Items()) != 0 {
+		t.Fatalf("requests.Items() = %d, want 0", len(m.requests.Items()))
+	}
+}
