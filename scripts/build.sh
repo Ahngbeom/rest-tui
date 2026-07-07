@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+install=false
+for arg in "$@"; do
+  case "$arg" in
+    --install) install=true ;;
+    *)
+      echo "scripts/build.sh: unknown argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
@@ -25,3 +36,20 @@ echo "  source commit: ${commit}"
 echo "  platform:      ${platform}"
 echo "  binary:        ${REPO_ROOT}/rest-tui (${size} bytes)"
 echo "  built at:      $(date '+%Y-%m-%dT%H:%M:%S%z')"
+
+if $install; then
+  install_dir="${REST_TUI_INSTALL_DIR:-$HOME/.local/bin}"
+  mkdir -p "$install_dir"
+  cp "$REPO_ROOT/rest-tui" "$install_dir/rest-tui"
+  chmod +x "$install_dir/rest-tui"
+  echo "[build.sh] installed: ${install_dir}/rest-tui"
+
+  case ":${PATH}:" in
+    *":${install_dir}:"*) ;;
+    *)
+      echo "[build.sh] WARNING: ${install_dir} is not on your PATH." >&2
+      echo "[build.sh] Add this line to your shell rc file (~/.bashrc, ~/.zshrc, etc.) and restart your shell:" >&2
+      printf '[build.sh]   export PATH="%s:$PATH"\n' "$install_dir" >&2
+      ;;
+  esac
+fi

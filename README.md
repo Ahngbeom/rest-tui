@@ -8,9 +8,25 @@
 - IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환 (우선순위: 파일 변수 > private 환경 > public 환경)
 - 요청 실행 결과(상태 코드/헤더/바디)를 JSON 들여쓰기 + ANSI 컬러로 표시
 - 실행 히스토리 저장 및 조회, 과거 요청 재실행(rerun)
-- 키보드만으로 조작하는 화면 전환(파일 탐색 → 요청 → 히스토리)
+- `-dir`로 열었던 디렉터리 이력 저장 및 조회, 다른 디렉터리로 즉시 전환(재스캔)
+- 키보드만으로 조작하는 화면 전환(파일 탐색 → 요청 → 히스토리 → 디렉터리 이력)
 
 ## Installation
+
+### curl 스크립트 (권장)
+
+Go 툴체인이나 Homebrew 없이 `$HOME/.local/bin`에 사전 빌드된 바이너리를 설치합니다. sudo가 필요하지 않습니다.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Ahngbeom/rest-tui/main/scripts/install.sh | bash
+```
+
+- 지원 대상: linux/darwin × amd64/arm64 (Windows는 아래 "미리 빌드된 바이너리 다운로드" 또는 `go install` 사용)
+- 특정 버전 설치: `REST_TUI_VERSION=v0.1.0 curl -fsSL ... | bash`
+- 설치 후 `$HOME/.local/bin`이 PATH에 없다면 스크립트가 안내 문구를 출력합니다. 셸 설정 파일(`~/.bashrc`, `~/.zshrc` 등)에 다음을 추가하세요:
+  ```sh
+  export PATH="$HOME/.local/bin:$PATH"
+  ```
 
 ### go install
 
@@ -28,7 +44,7 @@ brew install Ahngbeom/tap/rest-tui
 
 ### 미리 빌드된 바이너리 다운로드
 
-Go나 Homebrew 없이 사용하려면 [Releases](https://github.com/Ahngbeom/rest-tui/releases) 페이지에서 사용 중인 OS/아키텍처(linux/darwin/windows × amd64/arm64)에 맞는 바이너리를 내려받아 실행 권한만 부여하면 됩니다.
+Windows를 포함해 위 방법들을 사용할 수 없다면 [Releases](https://github.com/Ahngbeom/rest-tui/releases) 페이지에서 사용 중인 OS/아키텍처(linux/darwin/windows × amd64/arm64)에 맞는 바이너리를 내려받아 실행 권한만 부여하면 됩니다.
 
 ```sh
 tar -xzf rest-tui_<version>_<os>_<arch>.tar.gz
@@ -41,7 +57,8 @@ chmod +x rest-tui
 ```sh
 git clone https://github.com/Ahngbeom/rest-tui.git
 cd rest-tui
-scripts/build.sh   # go vet 후 빌드해 ./rest-tui 생성
+scripts/build.sh            # go vet 후 빌드해 ./rest-tui 생성
+scripts/build.sh --install  # 위와 동일하게 빌드한 뒤 $HOME/.local/bin 에도 설치
 ```
 
 ## Usage
@@ -67,6 +84,7 @@ rest-tui -dir <path-to-http-files>
 | `Ctrl+R` | 요청 전송 |
 | `Tab` | 패널(파일 ↔ 요청) 전환 |
 | `h` | 히스토리 화면으로 이동 |
+| `d` | 디렉터리 이력 화면으로 이동 |
 | `↑`/`k`, `↓`/`j` | 위/아래 이동 |
 | `r` | 선택한 히스토리 항목 재실행 |
 | `e` | 환경(env) 순환 전환 |
@@ -84,6 +102,10 @@ rest-tui -dir <path-to-http-files>
 ## History
 
 요청을 전송하면 자동으로 히스토리에 기록됩니다. 기본 저장 위치는 `~/.config/rest-tui/history.json`이며 `-config`로 변경할 수 있습니다. 히스토리 화면(`h`)에서 과거 실행을 조회하고 `r`로 재실행할 수 있습니다.
+
+## Directory history
+
+`-dir`로 실행할 때마다 해당 디렉터리가 `~/.config/rest-tui/dirs.json`에 자동으로 기록됩니다(고정 경로, 별도 플래그 없음). 디렉터리 이력 화면(`d`)에서 과거에 열었던 디렉터리 목록을 최근 사용 순으로 조회하고, `enter`로 선택하면 앱을 재시작하지 않고도 해당 디렉터리를 즉시 재스캔해 전환할 수 있습니다.
 
 ## Development
 
