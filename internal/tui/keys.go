@@ -6,17 +6,22 @@ import "github.com/charmbracelet/bubbles/key"
 // (e.g. "e" to cycle environments) are matched by literal key string in the
 // owning screen's Update instead of living here.
 type keyMap struct {
-	Quit      key.Binding
-	Help      key.Binding
-	Back      key.Binding
-	Enter     key.Binding
-	Tab       key.Binding
-	ToggleLog key.Binding // "h": jump to the History screen from anywhere
-	Up        key.Binding
-	Down      key.Binding
-	Rerun     key.Binding
-	CycleEnv  key.Binding
-	Send      key.Binding
+	Quit        key.Binding
+	Help        key.Binding
+	Back        key.Binding
+	Enter       key.Binding
+	Tab         key.Binding
+	ToggleLog   key.Binding // "h": jump to the History screen from anywhere
+	Up          key.Binding
+	Down        key.Binding
+	Rerun       key.Binding
+	CycleEnv    key.Binding
+	Send        key.Binding
+	Copy        key.Binding
+	Directories key.Binding // "d": jump to the Directory History screen from anywhere
+	Edit        key.Binding // "i": open the raw-text request editor
+	ApplyEdit   key.Binding // "ctrl+s": apply the edit buffer
+	CancelEdit  key.Binding // "esc": discard the edit buffer (edit mode only)
 }
 
 var keys = keyMap{
@@ -63,5 +68,25 @@ var keys = keyMap{
 	Send: key.NewBinding(
 		key.WithKeys("enter", "ctrl+r"),
 		key.WithHelp("enter", "send"),
+	),
+	Copy: key.NewBinding(
+		key.WithKeys("c", "y"),
+		key.WithHelp("c", "copy"),
+	),
+	Directories: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "directories"),
+	),
+	Edit: key.NewBinding(
+		key.WithKeys("i"),
+		key.WithHelp("i", "edit"),
+	),
+	ApplyEdit: key.NewBinding(
+		key.WithKeys("ctrl+s"),
+		key.WithHelp("ctrl+s", "apply edit"),
+	),
+	CancelEdit: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "cancel edit"),
 	),
 }

@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Ahngbeom/rest-tui/internal/dirhistory"
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/tui"
 )
@@ -25,10 +26,22 @@ func defaultHistoryPath() (string, error) {
 	return filepath.Join(home, ".config", "rest-tui", "history.json"), nil
 }
 
+func defaultDirHistoryPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "rest-tui", "dirs.json"), nil
+}
+
 func main() {
 	defaultHistory, err := defaultHistoryPath()
 	if err != nil {
 		defaultHistory = "history.json"
+	}
+	defaultDirHistory, err := defaultDirHistoryPath()
+	if err != nil {
+		defaultDirHistory = "dirs.json"
 	}
 
 	dir := flag.String("dir", ".", "directory to search for .http files")
@@ -48,7 +61,8 @@ func main() {
 	}
 
 	store := history.NewStore(*historyPath)
-	app := tui.NewApp(root, store)
+	dirStore := dirhistory.NewStore(defaultDirHistory)
+	app := tui.NewApp(root, store, dirStore)
 
 	if _, err := tea.NewProgram(app, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "rest-tui:", err)

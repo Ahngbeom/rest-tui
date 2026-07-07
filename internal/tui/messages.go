@@ -19,6 +19,15 @@ type rerunMsg struct {
 	entry history.Entry
 }
 
+// openRequestFromEntryMsg asks the app to switch to the Request view
+// pre-loaded with a past history entry's data, without sending it. This is
+// used when the user selects an entry from the Browser's "Recent" list, as
+// opposed to rerunMsg (used from the History screen's "r" key), which
+// resends immediately.
+type openRequestFromEntryMsg struct {
+	entry history.Entry
+}
+
 // backToBrowserMsg asks the app to return to the Browser screen.
 type backToBrowserMsg struct{}
 
@@ -32,4 +41,24 @@ type openHistoryMsg struct{}
 type execResultMsg struct {
 	entry       history.Entry
 	historyWarn string
+}
+
+// clipboardCopyMsg carries the outcome of a clipboard write triggered by the
+// Copy key. token guards against a stale result from a superseded copy
+// attempt clobbering a newer one's status.
+type clipboardCopyMsg struct {
+	token int
+	err   error
+}
+
+// clipboardCopyExpiredMsg clears a previously-shown clipboard status message
+// after a short delay. token guards against clearing a newer status.
+type clipboardCopyExpiredMsg struct {
+	token int
+}
+
+// switchDirMsg asks the app to record path in the directory history and make
+// it the active root, re-scanning it in the Browser.
+type switchDirMsg struct {
+	path string
 }

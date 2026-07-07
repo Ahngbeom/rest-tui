@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -270,5 +272,252 @@ func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
 	}
 	if msg.entry.ResponseBody != `{"replayed":true}` {
 		t.Errorf("ResponseBody = %q", msg.entry.ResponseBody)
+	}
+}
+
+func TestRequestModel_CopyTextNotYetSent(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	got := m.copyText()
+	if !strings.Contains(got, "not yet sent") {
+		t.Errorf("copyText() = %q, want it to mention not yet sent", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("copyText() = %q, should not contain ANSI escapes", got)
+	}
+}
+
+func TestRequestModel_CopyTextAfterExecResult(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: `{"ok":true}`}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	got := m.copyText()
+	if !strings.Contains(got, "GET https://example.com") {
+		t.Errorf("copyText() = %q, want it to contain the request line", got)
+	}
+	if !strings.Contains(got, `"ok": true`) {
+		t.Errorf("copyText() = %q, want it to contain the pretty response body", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("copyText() = %q, should not contain ANSI escapes", got)
+	}
+}
+
+func TestRequestModel_CopyTextAfterError(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	entry := history.Entry{Method: "GET", URL: req.URL, Error: "connection refused"}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	got := m.copyText()
+	if !strings.Contains(got, "Error: connection refused") {
+		t.Errorf("copyText() = %q, want it to contain the error", got)
+	}
+}
+
+func TestRequestModel_CopyKeyReturnsCommandWithoutInvokingIt(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd == nil {
+		t.Fatal("expected a copy command")
+	}
+	if m.copyToken != 1 {
+		t.Errorf("copyToken = %d, want 1", m.copyToken)
+	}
+	// Do not invoke cmd(): it would write to the real OS clipboard.
+}
+
+func TestRequestModel_ClipboardCopyMsgSetsStatus(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m.copyToken = 1
+
+	m, cmd := m.Update(clipboardCopyMsg{token: 1, err: nil})
+	if m.copyStatus != "copied to clipboard" || m.copyErr {
+		t.Errorf("copyStatus = %q, copyErr = %v", m.copyStatus, m.copyErr)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to clear the status later")
+	}
+
+	m2, _ := m.Update(clipboardCopyMsg{token: 1, err: errors.New("boom")})
+	if !m2.copyErr || !strings.Contains(m2.copyStatus, "boom") {
+		t.Errorf("copyStatus = %q, copyErr = %v", m2.copyStatus, m2.copyErr)
+	}
+}
+
+func TestRequestModel_ClipboardCopyMsgIgnoresStaleToken(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m.copyToken = 2
+
+	m, _ = m.Update(clipboardCopyMsg{token: 1, err: nil})
+	if m.copyStatus != "" {
+		t.Errorf("copyStatus = %q, want empty for a stale token", m.copyStatus)
+	}
+}
+
+func TestRequestModel_ClipboardCopyExpiredMsgClearsStatus(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m.copyToken = 1
+	m.copyStatus = "copied to clipboard"
+
+	m, _ = m.Update(clipboardCopyExpiredMsg{token: 0})
+	if m.copyStatus == "" {
+		t.Error("stale expiry token should not clear a newer status")
+	}
+
+	m, _ = m.Update(clipboardCopyExpiredMsg{token: 1})
+	if m.copyStatus != "" {
+		t.Errorf("copyStatus = %q, want cleared", m.copyStatus)
+	}
+}
+
+func TestRequestModel_EditKeySeedsEditorWithSerializedResolved(t *testing.T) {
+	req := httpfile.Request{
+		Method:  "POST",
+		URL:     "https://example.com/users",
+		Headers: []httpfile.Header{{Name: "Content-Type", Value: "application/json"}},
+		Body:    `{"name":"Ahn"}`,
+	}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+
+	if !m.editing {
+		t.Fatal("expected editing = true after pressing i")
+	}
+	want := serializeRequest(m.resolved)
+	if got := m.editor.Value(); got != want {
+		t.Errorf("editor.Value() = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(m.editor.Value(), "POST https://example.com/users\n") {
+		t.Errorf("editor.Value() = %q, want it to start with the request line", m.editor.Value())
+	}
+}
+
+func TestRequestModel_ApplyEditValidUpdatesResolvedAndClearsMissingVars(t *testing.T) {
+	dir := t.TempDir()
+	req := httpfile.Request{Method: "GET", URL: "{{missing}}/old"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+	if len(m.missingVars) == 0 {
+		t.Fatal("precondition failed: expected missingVars to be non-empty")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m.editor.SetValue("GET https://new.example.com/x\nX-Foo: bar\n")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if m.editing {
+		t.Fatal("expected editing = false after applying a valid edit")
+	}
+	if m.resolved.URL != "https://new.example.com/x" {
+		t.Errorf("resolved.URL = %q", m.resolved.URL)
+	}
+	if len(m.resolved.Headers) != 1 || m.resolved.Headers[0].Name != "X-Foo" || m.resolved.Headers[0].Value != "bar" {
+		t.Errorf("resolved.Headers = %+v", m.resolved.Headers)
+	}
+	if len(m.missingVars) != 0 {
+		t.Errorf("missingVars = %v, want empty after edit", m.missingVars)
+	}
+}
+
+func TestRequestModel_ApplyEditParseErrorStaysInEditModeWithMessage(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	origResolved := m.resolved
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m.editor.SetValue("GET https://example.com\nbad header line\n")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if !m.editing {
+		t.Fatal("expected editing to stay true after a parse error")
+	}
+	if !strings.HasPrefix(m.editError, "line ") {
+		t.Errorf("editError = %q, want it to start with %q", m.editError, "line ")
+	}
+	if !reflect.DeepEqual(m.resolved, origResolved) {
+		t.Errorf("resolved = %+v, want unchanged %+v", m.resolved, origResolved)
+	}
+}
+
+func TestRequestModel_ApplyEditWrongRequestCountStaysInEditModeWithMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "zero requests", text: "// just a comment\n", want: "expected exactly one request, got 0"},
+		{name: "two requests", text: "GET https://a.example.com\n### second\nGET https://b.example.com\n", want: "expected exactly one request, got 2"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+			m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+			m.editor.SetValue(tc.text)
+
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+
+			if !m.editing {
+				t.Fatal("expected editing to stay true when request count is wrong")
+			}
+			if m.editError != tc.want {
+				t.Errorf("editError = %q, want %q", m.editError, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestModel_EscCancelsEditWithoutMutatingResolved(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	origResolved := m.resolved
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m.editor.SetValue("GET https://changed.example.com\n")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.editing {
+		t.Fatal("expected editing = false after esc")
+	}
+	if !reflect.DeepEqual(m.resolved, origResolved) {
+		t.Errorf("resolved = %+v, want unchanged %+v", m.resolved, origResolved)
+	}
+	if cmd != nil {
+		if _, ok := cmd().(backToBrowserMsg); ok {
+			t.Fatal("esc while editing should not emit backToBrowserMsg")
+		}
+	}
+}
+
+func TestRequestModel_BackspaceWhileEditingDeletesCharacterInsteadOfCancelling(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	before := m.editor.Value()
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+
+	if !m.editing {
+		t.Fatal("expected editing to stay true after backspace")
+	}
+	if len(m.editor.Value()) != len(before)-1 {
+		t.Errorf("editor.Value() = %q (len %d), want len %d", m.editor.Value(), len(m.editor.Value()), len(before)-1)
 	}
 }

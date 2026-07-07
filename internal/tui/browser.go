@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
@@ -77,7 +78,8 @@ const (
 )
 
 type browserModel struct {
-	root string
+	root  string
+	store *history.Store // used to (re)populate the Recent list
 
 	files    list.Model
 	requests list.Model
@@ -87,10 +89,17 @@ type browserModel struct {
 	parsedFile   *httpfile.File
 	parseErr     error
 
+	// rootErr holds a failure to scan root itself (e.g. the -dir path
+	// doesn't exist), distinct from parseErr (a selected file's .http parse
+	// failure) so the Files pane can show the right message instead of the
+	// Requests pane misleadingly reporting a "parse error" before any file
+	// has even been selected.
+	rootErr error
+
 	width, height int
 }
 
-func newBrowserModel(root string) browserModel {
+func newBrowserModel(root string, store *history.Store) browserModel {
 	files := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	files.Title = "HTTP Files"
 	files.SetShowHelp(false)
@@ -101,7 +110,7 @@ func newBrowserModel(root string) browserModel {
 	requests.SetShowHelp(false)
 	requests.SetFilteringEnabled(false)
 
-	m := browserModel{root: root, files: files, requests: requests}
+	m := browserModel{root: root, store: store, files: files, requests: requests}
 
 	if rels, err := discoverHTTPFiles(root); err == nil {
 		items := make([]list.Item, len(rels))
@@ -110,9 +119,31 @@ func newBrowserModel(root string) browserModel {
 		}
 		m.files.SetItems(items)
 	} else {
-		m.parseErr = err
+		m.rootErr = err
 	}
 
+	m = m.refreshRecent()
+
+	return m
+}
+
+// refreshRecent repopulates the requests pane with the most recent history
+// entries and relabels it "Recent", for display before any .http file has
+// been selected. If there is no history yet, it leaves the pane exactly as
+// it already was (the default empty "Requests" list). Callers must only
+// invoke this when no file is currently selected (m.parsedFile == nil);
+// selectFile always overwrites the pane immediately afterward anyway.
+func (m browserModel) refreshRecent() browserModel {
+	entries, err := m.store.List(20)
+	if err != nil || len(entries) == 0 {
+		return m
+	}
+	items := make([]list.Item, len(entries))
+	for i, e := range entries {
+		items[i] = entryItem{entry: e}
+	}
+	m.requests.Title = "Recent"
+	m.requests.SetItems(items)
 	return m
 }
 
@@ -139,6 +170,8 @@ func (m browserModel) selectFile() browserModel {
 	if !ok {
 		return m
 	}
+	m.requests.Title = "Requests" // selecting a file always replaces any Recent list
+
 	full := filepath.Join(m.root, item.rel)
 	m.selectedFile = full
 
@@ -177,7 +210,7 @@ func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case key.Matches(keyMsg, keys.Tab):
-			if m.focus == paneFiles && m.parsedFile != nil {
+			if m.focus == paneFiles && (m.parsedFile != nil || len(m.requests.Items()) > 0) {
 				m.focus = paneRequests
 			} else {
 				m.focus = paneFiles
@@ -192,10 +225,16 @@ func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 			if m.focus == paneFiles {
 				return m.selectFile(), nil
 			}
-			if item, ok := m.requests.SelectedItem().(requestItem); ok {
+			switch item := m.requests.SelectedItem().(type) {
+			case requestItem:
 				filePath, file := m.selectedFile, m.parsedFile
 				return m, func() tea.Msg {
 					return openRequestMsg{filePath: filePath, file: file, req: item.req}
+				}
+			case entryItem:
+				entry := item.entry
+				return m, func() tea.Msg {
+					return openRequestFromEntryMsg{entry: entry}
 				}
 			}
 			return m, nil
@@ -211,16 +250,38 @@ func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	return m, cmd
 }
 
+// titleStyles reports which title style each pane should use, based on
+// which pane currently has focus -- the focused pane's title gets the
+// eye-catching accent-color pill, the other pane's fades to plain muted
+// text (see paneTitleActiveStyle/paneTitleInactiveStyle in styles.go).
+func (m browserModel) titleStyles() (files, requests lipgloss.Style) {
+	if m.focus == paneFiles {
+		return paneTitleActiveStyle, paneTitleInactiveStyle
+	}
+	return paneTitleInactiveStyle, paneTitleActiveStyle
+}
+
 func (m browserModel) View() string {
+	// Local copies so the title-highlight swap below never touches the
+	// actual m.files/m.requests (which carry cursor/selection state).
+	files := m.files
+	requests := m.requests
+	files.Styles.Title, requests.Styles.Title = m.titleStyles()
+
 	filesPane := paneStyle
 	requestsPane := paneStyle
 	if m.focus == paneFiles {
-		filesPane = paneFocusedStyle
+		filesPane = browserActivePaneStyle
 	} else {
-		requestsPane = paneFocusedStyle
+		requestsPane = browserActivePaneStyle
 	}
 
-	right := m.requests.View()
+	left := files.View()
+	if m.rootErr != nil {
+		left = errorTextStyle.Render("cannot scan directory:\n" + m.rootErr.Error())
+	}
+
+	right := requests.View()
 	switch {
 	case m.parseErr != nil:
 		right = errorTextStyle.Render("parse error:\n" + m.parseErr.Error())
@@ -230,7 +291,7 @@ func (m browserModel) View() string {
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		filesPane.Render(m.files.View()),
+		filesPane.Render(left),
 		requestsPane.Render(right),
 	)
 }

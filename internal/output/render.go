@@ -61,6 +61,36 @@ func PrettyBody(body []byte, opts Options) string {
 	return renderBody(body, opts)
 }
 
+// RenderTransaction formats a full request/response record: the request's
+// method, URL, and headers, followed by its body (if any), a divider, and
+// finally the response section. If resp is nil, note is shown in its place
+// instead (e.g. "not yet sent", "sending...", or an error message).
+func RenderTransaction(req httpfile.Request, resp *executor.Response, note string, opts Options) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%s %s\n", req.Method, req.URL)
+	for _, h := range req.Headers {
+		fmt.Fprintf(&b, "%s: %s\n", h.Name, h.Value)
+	}
+	if req.Body != "" {
+		b.WriteString("\n")
+		b.WriteString(renderBody([]byte(req.Body), opts))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 40))
+	b.WriteString("\n\n")
+
+	if resp != nil {
+		b.WriteString(RenderResponse(resp, opts))
+	} else {
+		b.WriteString(note)
+	}
+
+	return b.String()
+}
+
 func renderBody(body []byte, opts Options) string {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {

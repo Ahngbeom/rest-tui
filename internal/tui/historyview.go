@@ -10,7 +10,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Ahngbeom/rest-tui/internal/executor"
 	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
@@ -70,6 +72,25 @@ func renderEntryDetail(e history.Entry) string {
 	return b.String()
 }
 
+// copyEntryPlainText builds the plain-text (no ANSI) request+response block
+// for a history entry, for the Copy key in detail mode.
+func copyEntryPlainText(e history.Entry) string {
+	req := httpfile.Request{
+		Method:  e.Method,
+		URL:     e.URL,
+		Headers: e.RequestHeaders,
+		Body:    e.RequestBody,
+	}
+	var resp *executor.Response
+	var note string
+	if e.Error != "" {
+		note = "Error: " + e.Error
+	} else {
+		resp = responseFromEntry(e)
+	}
+	return output.RenderTransaction(req, resp, note, output.Options{Color: false})
+}
+
 type historyModel struct {
 	store *history.Store
 
@@ -79,6 +100,10 @@ type historyModel struct {
 
 	selected *history.Entry
 	loadErr  error
+
+	copyStatus string
+	copyErr    bool
+	copyToken  int
 
 	width, height int
 }
@@ -125,15 +150,32 @@ func (m historyModel) SetSize(width, height int) historyModel {
 }
 
 func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	switch msg := msg.(type) {
+	case clipboardCopyMsg:
+		if msg.token != m.copyToken {
+			return m, nil
+		}
+		m.copyErr = msg.err != nil
+		if msg.err != nil {
+			m.copyStatus = "copy failed: " + msg.err.Error()
+		} else {
+			m.copyStatus = "copied to clipboard"
+		}
+		return m, clearCopyStatusAfter(msg.token)
+	case clipboardCopyExpiredMsg:
+		if msg.token == m.copyToken {
+			m.copyStatus = ""
+		}
+		return m, nil
+	case tea.KeyMsg:
 		switch {
-		case key.Matches(keyMsg, keys.Back):
+		case key.Matches(msg, keys.Back):
 			if m.mode == historyModeDetail {
 				m.mode = historyModeList
 				return m, nil
 			}
 			return m, func() tea.Msg { return backToBrowserMsg{} }
-		case key.Matches(keyMsg, keys.Enter):
+		case key.Matches(msg, keys.Enter):
 			if m.mode == historyModeList {
 				if item, ok := m.list.SelectedItem().(entryItem); ok {
 					e := item.entry
@@ -143,7 +185,7 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 				}
 			}
 			return m, nil
-		case key.Matches(keyMsg, keys.Rerun):
+		case key.Matches(msg, keys.Rerun):
 			var entry history.Entry
 			switch {
 			case m.mode == historyModeDetail && m.selected != nil:
@@ -156,6 +198,12 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 				entry = item.entry
 			}
 			return m, func() tea.Msg { return rerunMsg{entry: entry} }
+		case key.Matches(msg, keys.Copy):
+			if m.mode == historyModeDetail && m.selected != nil {
+				m.copyToken++
+				return m, copyToClipboardCmd(copyEntryPlainText(*m.selected), m.copyToken)
+			}
+			return m, nil
 		}
 	}
 
@@ -173,7 +221,15 @@ func (m historyModel) View() string {
 		return paneFocusedStyle.Render(errorTextStyle.Render("failed to load history: " + m.loadErr.Error()))
 	}
 	if m.mode == historyModeDetail {
-		return paneFocusedStyle.Render(m.detail.View())
+		content := m.detail.View()
+		if m.copyStatus != "" {
+			style := copiedTextStyle
+			if m.copyErr {
+				style = errorTextStyle
+			}
+			content += "\n" + style.Render(m.copyStatus)
+		}
+		return paneFocusedStyle.Render(content)
 	}
 	return paneFocusedStyle.Render(m.list.View())
 }

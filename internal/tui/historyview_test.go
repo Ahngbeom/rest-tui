@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -111,5 +113,93 @@ func TestHistoryModel_BackFromListEmitsBackToBrowserMsg(t *testing.T) {
 	}
 	if _, ok := cmd().(backToBrowserMsg); !ok {
 		t.Fatalf("expected backToBrowserMsg, got %T", cmd())
+	}
+}
+
+func TestCopyEntryPlainText(t *testing.T) {
+	e := history.Entry{
+		Method: "GET", URL: "https://example.com/a",
+		StatusCode: 200, ResponseBody: `{"ok":true}`,
+	}
+
+	got := copyEntryPlainText(e)
+	if !strings.Contains(got, "GET https://example.com/a") {
+		t.Errorf("copyEntryPlainText() = %q, want it to contain the request line", got)
+	}
+	if !strings.Contains(got, `"ok": true`) {
+		t.Errorf("copyEntryPlainText() = %q, want it to contain the pretty response body", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("copyEntryPlainText() = %q, should not contain ANSI escapes", got)
+	}
+}
+
+func TestCopyEntryPlainText_Error(t *testing.T) {
+	e := history.Entry{Method: "GET", URL: "https://example.com/a", Error: "timeout"}
+
+	got := copyEntryPlainText(e)
+	if !strings.Contains(got, "Error: timeout") {
+		t.Errorf("copyEntryPlainText() = %q, want it to contain the error", got)
+	}
+}
+
+func TestHistoryModel_CopyKeyGatedByDetailMode(t *testing.T) {
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh()
+
+	// In list mode, Copy should be a no-op.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Error("expected no copy command in list mode")
+	}
+
+	// In detail mode, Copy should return a command (not invoked here — it
+	// would write to the real OS clipboard).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd == nil {
+		t.Fatal("expected a copy command in detail mode")
+	}
+	if m.copyToken != 1 {
+		t.Errorf("copyToken = %d, want 1", m.copyToken)
+	}
+}
+
+func TestHistoryModel_ClipboardCopyMsgSetsStatus(t *testing.T) {
+	store := newTestHistoryStore(t)
+	m := newHistoryModel(store).refresh()
+	m.copyToken = 1
+
+	m, cmd := m.Update(clipboardCopyMsg{token: 1, err: nil})
+	if m.copyStatus != "copied to clipboard" || m.copyErr {
+		t.Errorf("copyStatus = %q, copyErr = %v", m.copyStatus, m.copyErr)
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to clear the status later")
+	}
+
+	m2, _ := m.Update(clipboardCopyMsg{token: 1, err: errors.New("boom")})
+	if !m2.copyErr || !strings.Contains(m2.copyStatus, "boom") {
+		t.Errorf("copyStatus = %q, copyErr = %v", m2.copyStatus, m2.copyErr)
+	}
+}
+
+func TestHistoryModel_ClipboardCopyExpiredMsgClearsStatus(t *testing.T) {
+	store := newTestHistoryStore(t)
+	m := newHistoryModel(store).refresh()
+	m.copyToken = 1
+	m.copyStatus = "copied to clipboard"
+
+	m, _ = m.Update(clipboardCopyExpiredMsg{token: 0})
+	if m.copyStatus == "" {
+		t.Error("stale expiry token should not clear a newer status")
+	}
+
+	m, _ = m.Update(clipboardCopyExpiredMsg{token: 1})
+	if m.copyStatus != "" {
+		t.Errorf("copyStatus = %q, want cleared", m.copyStatus)
 	}
 }
