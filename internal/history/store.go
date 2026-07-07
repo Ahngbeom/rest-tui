@@ -35,6 +35,14 @@ type Entry struct {
 type Store struct {
 	path string
 
+	// fileMu serializes the load-modify-save critical section shared by
+	// Append/List/Get so concurrent calls (e.g. two in-flight request sends)
+	// can't race on reading/writing the same file and clobber each other's
+	// writes. It is separate from mu (below) so Warning() never blocks on
+	// file I/O and load() can set the warning without risking a self-deadlock
+	// while fileMu is already held by its caller.
+	fileMu sync.Mutex
+
 	mu      sync.Mutex
 	warning string
 }
@@ -60,6 +68,9 @@ func (s *Store) Warning() string {
 // Append records a new entry, filling in ID/Timestamp if they are zero, and
 // returns the stored entry.
 func (s *Store) Append(e Entry) (Entry, error) {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+
 	entries, err := s.load()
 	if err != nil {
 		return Entry{}, err
@@ -82,7 +93,9 @@ func (s *Store) Append(e Entry) (Entry, error) {
 // List returns the most recently recorded entries first. A non-positive
 // limit returns all entries.
 func (s *Store) List(limit int) ([]Entry, error) {
+	s.fileMu.Lock()
 	entries, err := s.load()
+	s.fileMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +111,9 @@ func (s *Store) List(limit int) ([]Entry, error) {
 
 // Get returns the entry with the given ID.
 func (s *Store) Get(id string) (*Entry, error) {
+	s.fileMu.Lock()
 	entries, err := s.load()
+	s.fileMu.Unlock()
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package history
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -166,6 +167,43 @@ func TestStore_RequestAndResponseFieldsRoundTrip(t *testing.T) {
 	}
 	if len(got.RequestHeaders) != 1 || got.RequestHeaders[0].Name != "Content-Type" {
 		t.Errorf("RequestHeaders = %v", got.RequestHeaders)
+	}
+}
+
+func TestStore_ConcurrentAppendDoesNotLoseEntries(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			_, err := s.Append(Entry{Method: "GET", URL: fmt.Sprintf("https://example.com/%d", i)})
+			if err != nil {
+				t.Errorf("Append %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	entries, err := s.List(0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != n {
+		t.Fatalf("expected %d entries after concurrent Append, got %d (lost update)", n, len(entries))
+	}
+
+	seen := make(map[string]bool, n)
+	for _, e := range entries {
+		seen[e.URL] = true
+	}
+	for i := 0; i < n; i++ {
+		want := fmt.Sprintf("https://example.com/%d", i)
+		if !seen[want] {
+			t.Errorf("missing entry with URL %q after concurrent Append", want)
+		}
 	}
 }
 
