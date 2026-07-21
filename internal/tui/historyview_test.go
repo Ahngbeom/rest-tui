@@ -48,6 +48,53 @@ func TestHistoryModel_EnterShowsDetail(t *testing.T) {
 	}
 }
 
+func longURLResponseEntry(longURL string) history.Entry {
+	return history.Entry{
+		Method: "GET", URL: "https://example.com/a", StatusCode: 200,
+		ResponseBody: `{"url": "` + longURL + `"}`,
+	}
+}
+
+func detailViewJoined(m historyModel) string {
+	view := ansiEscapePattern.ReplaceAllString(m.detail.View(), "")
+	var joined strings.Builder
+	for _, line := range strings.Split(view, "\n") {
+		joined.WriteString(strings.TrimRight(line, " "))
+	}
+	return joined.String()
+}
+
+func TestHistoryModel_LongResponseLineWrapsInsteadOfTruncating(t *testing.T) {
+	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(longURLResponseEntry(longURL)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(60, 20) // innerWidth = 56
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !strings.Contains(detailViewJoined(m), longURL) {
+		t.Errorf("detail.View() does not contain the full URL unbroken; got:\n%s", m.detail.View())
+	}
+}
+
+func TestHistoryModel_ShrinkingWhileInDetailModeRewraps(t *testing.T) {
+	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(longURLResponseEntry(longURL)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(200, 20) // wide enough that the URL fits on one line
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetSize(60, 20) // shrink while a detail is showing
+
+	if !strings.Contains(detailViewJoined(m), longURL) {
+		t.Errorf("detail.View() does not contain the full URL unbroken after shrinking; got:\n%s", m.detail.View())
+	}
+}
+
 func TestHistoryModel_RerunFromListEmitsRerunMsg(t *testing.T) {
 	store := newTestHistoryStore(t)
 	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a"}); err != nil {

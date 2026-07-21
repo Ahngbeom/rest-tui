@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -15,6 +16,11 @@ import (
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
+
+// ansiEscapePattern strips ANSI SGR escape codes (color/bold from
+// output.RenderResponse) so rendered viewport content can be compared as
+// plain text in tests.
+var ansiEscapePattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func newTestHistoryStore(t *testing.T) *history.Store {
 	t.Helper()
@@ -236,6 +242,26 @@ func TestRequestModel_BuildContentResponseOffsetPointsPastDivider(t *testing.T) 
 	}
 	if strings.Contains(lines[offset], "─") {
 		t.Errorf("lines[offset] = %q, want the response section, not the divider", lines[offset])
+	}
+}
+
+func TestRequestModel_LongResponseLineWrapsInsteadOfTruncating(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m = m.SetSize(60, 20) // innerWidth = 56
+
+	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
+	body := `{"url": "` + longURL + `"}`
+	entry := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, ResponseBody: body}
+	m, _ = m.Update(execResultMsg{entry: entry})
+
+	view := ansiEscapePattern.ReplaceAllString(m.viewport.View(), "")
+	var joined strings.Builder
+	for _, line := range strings.Split(view, "\n") {
+		joined.WriteString(strings.TrimRight(line, " "))
+	}
+	if !strings.Contains(joined.String(), longURL) {
+		t.Errorf("viewport.View() does not contain the full URL unbroken; got:\n%s", view)
 	}
 }
 

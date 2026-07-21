@@ -61,3 +61,14 @@ var (
 	mutedTextStyle  = lipgloss.NewStyle().Foreground(colorFaintText)
 	copiedTextStyle = lipgloss.NewStyle().Foreground(colorSuccess)
 )
+
+// wrapToWidth word-wraps s to width columns, ANSI-color-code aware, so that
+// a bubbles/viewport.Model never needs to horizontally clip a line --
+// viewport.Model only scrolls/clips, it does not wrap on its own. width <= 0
+// (viewport not sized yet) returns s unchanged.
+func wrapToWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	return lipgloss.NewStyle().Width(width).Render(s)
+}

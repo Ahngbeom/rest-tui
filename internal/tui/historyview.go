@@ -146,6 +146,9 @@ func (m historyModel) SetSize(width, height int) historyModel {
 	}
 	m.list.SetSize(innerWidth, innerHeight)
 	m.detail.Width, m.detail.Height = innerWidth, innerHeight
+	if m.mode == historyModeDetail && m.selected != nil {
+		m.detail.SetContent(wrapToWidth(renderEntryDetail(*m.selected), innerWidth))
+	}
 	return m
 }
 
@@ -180,7 +183,7 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 				if item, ok := m.list.SelectedItem().(entryItem); ok {
 					e := item.entry
 					m.selected = &e
-					m.detail.SetContent(renderEntryDetail(e))
+					m.detail.SetContent(wrapToWidth(renderEntryDetail(e), m.detail.Width))
 					m.mode = historyModeDetail
 				}
 			}

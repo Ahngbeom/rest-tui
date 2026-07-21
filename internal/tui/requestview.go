@@ -372,46 +372,49 @@ func (m requestModel) copyText() string {
 }
 
 func (m requestModel) buildContent() (string, int) {
-	var b strings.Builder
+	var head strings.Builder
 
-	fmt.Fprintf(&b, "%s %s\n", m.resolved.Method, m.resolved.URL)
+	fmt.Fprintf(&head, "%s %s\n", m.resolved.Method, m.resolved.URL)
 	for _, h := range m.resolved.Headers {
-		fmt.Fprintf(&b, "%s: %s\n", h.Name, h.Value)
+		fmt.Fprintf(&head, "%s: %s\n", h.Name, h.Value)
 	}
 	if m.resolved.Body != "" {
-		b.WriteString("\n")
-		b.WriteString(output.PrettyBody([]byte(m.resolved.Body), output.Options{Color: true}))
-		b.WriteString("\n")
+		head.WriteString("\n")
+		head.WriteString(output.PrettyBody([]byte(m.resolved.Body), output.Options{Color: true}))
+		head.WriteString("\n")
 	}
 	if len(m.missingVars) > 0 {
-		b.WriteString("\n")
-		b.WriteString(errorTextStyle.Render("unresolved variables: " + strings.Join(m.missingVars, ", ")))
-		b.WriteString("\n")
+		head.WriteString("\n")
+		head.WriteString(errorTextStyle.Render("unresolved variables: " + strings.Join(m.missingVars, ", ")))
+		head.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(mutedTextStyle.Render(strings.Repeat("─", 40)))
-	b.WriteString("\n\n")
+	head.WriteString("\n")
+	head.WriteString(mutedTextStyle.Render(strings.Repeat("─", 40)))
+	head.WriteString("\n\n")
 
-	responseOffset := strings.Count(b.String(), "\n")
+	headStr := wrapToWidth(head.String(), m.viewport.Width)
+	responseOffset := strings.Count(headStr, "\n")
+
+	var tail strings.Builder
 
 	switch {
 	case m.executing:
-		b.WriteString("Sending request...")
+		tail.WriteString("Sending request...")
 	case m.lastEntry == nil:
-		b.WriteString(mutedTextStyle.Render("(not yet sent — press enter to send)"))
+		tail.WriteString(mutedTextStyle.Render("(not yet sent — press enter to send)"))
 	case m.lastEntry.Error != "":
-		b.WriteString(errorTextStyle.Render("Error: " + m.lastEntry.Error))
+		tail.WriteString(errorTextStyle.Render("Error: " + m.lastEntry.Error))
 	default:
-		b.WriteString(output.RenderResponse(responseFromEntry(*m.lastEntry), output.Options{Color: true}))
+		tail.WriteString(output.RenderResponse(responseFromEntry(*m.lastEntry), output.Options{Color: true}))
 	}
 
 	if m.historyWarn != "" {
-		b.WriteString("\n\n")
-		b.WriteString(mutedTextStyle.Render(m.historyWarn))
+		tail.WriteString("\n\n")
+		tail.WriteString(mutedTextStyle.Render(m.historyWarn))
 	}
 
-	return b.String(), responseOffset
+	return headStr + wrapToWidth(tail.String(), m.viewport.Width), responseOffset
 }
 
 func (m requestModel) envLine() string {
