@@ -95,6 +95,31 @@ func TestHistoryModel_ShrinkingWhileInDetailModeRewraps(t *testing.T) {
 	}
 }
 
+func TestHistoryModel_LongResponseLineIsOneClickableHyperlink(t *testing.T) {
+	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(longURLResponseEntry(longURL)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(60, 20) // innerWidth = 56
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := m.detail.View()
+	open := "\x1b]8;;" + longURL + "\x1b\\"
+	const closeSeq = "\x1b]8;;\x1b\\"
+	// Other incidental URLs in the view (e.g. the request line's own URL)
+	// get their own independent hyperlink pair, so only assert that this
+	// specific URL's open marker is well-formed and followed by a close.
+	if n := strings.Count(view, open); n != 1 {
+		t.Errorf("OSC8 open marker count for the response URL = %d, want 1; got:\n%s", n, view)
+	}
+	openIdx := strings.Index(view, open)
+	if openIdx == -1 || !strings.Contains(view[openIdx:], closeSeq) {
+		t.Errorf("OSC8 open marker for the response URL has no matching close after it; got:\n%s", view)
+	}
+}
+
 func TestHistoryModel_RerunFromListEmitsRerunMsg(t *testing.T) {
 	store := newTestHistoryStore(t)
 	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a"}); err != nil {

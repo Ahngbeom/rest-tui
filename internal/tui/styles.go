@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
 
 var (
 	colorAccent    = lipgloss.Color("#00D7D7")
@@ -62,13 +65,16 @@ var (
 	copiedTextStyle = lipgloss.NewStyle().Foreground(colorSuccess)
 )
 
-// wrapToWidth word-wraps s to width columns, ANSI-color-code aware, so that
-// a bubbles/viewport.Model never needs to horizontally clip a line --
-// viewport.Model only scrolls/clips, it does not wrap on its own. width <= 0
-// (viewport not sized yet) returns s unchanged.
+// wrapToWidth word-wraps s to width columns (ANSI-color-code aware) and
+// makes any URL in it clickable as a single OSC 8 hyperlink even where the
+// wrap splits it across several physical lines -- a bubbles/viewport.Model
+// never needs to horizontally clip a line this way, and terminal
+// cmd+click/right-click URL detection still resolves the whole address.
+// width <= 0 (viewport not sized yet) returns s unchanged.
 func wrapToWidth(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return lipgloss.NewStyle().Width(width).Render(s)
+	wrapped := ansi.Hardwrap(s, width, false)
+	return hyperlinkURLs(s, wrapped)
 }
