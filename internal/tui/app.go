@@ -201,25 +201,26 @@ func (a App) breadcrumb() string {
 	}
 }
 
-func (a App) footerHints() string {
+func (a App) footerHints() []hint {
+	tail := []hint{{"?", "help"}, {"q", "quit"}}
 	switch a.screen {
 	case screenRequest:
 		if a.request.isEditing() {
-			return "ctrl+s apply  esc cancel"
+			return []hint{{"ctrl+s", "apply"}, {"esc", "cancel"}}
 		}
-		return "e cycle env  enter/ctrl+r send  ↑/↓ scroll  c copy  i edit  esc back  h history  d dirs  ? help  q quit"
+		return append([]hint{{"e", "cycle env"}, {"enter/ctrl+r", "send"}, {"↑/↓", "scroll"}, {"c", "copy"}, {"i", "edit"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
-			return "↑/↓ scroll  r rerun  c copy  esc back  ? help  q quit"
+			return append([]hint{{"↑/↓", "scroll"}, {"r", "rerun"}, {"c", "copy"}, {"esc", "back"}}, tail...)
 		}
-		return "↑/↓ move  enter detail  r rerun  esc back  ? help  q quit"
+		return append([]hint{{"↑/↓", "move"}, {"enter", "detail"}, {"r", "rerun"}, {"esc", "back"}}, tail...)
 	case screenDirHistory:
-		return "↑/↓ move  enter switch  esc back  ? help  q quit"
+		return append([]hint{{"↑/↓", "move"}, {"enter", "switch"}, {"esc", "back"}}, tail...)
 	default:
 		if a.browser.focus == paneRequests {
-			return "↑/↓ move  enter run  tab← files  esc back  h history  d dirs  ? help  q quit"
+			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"tab", "← files"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 		}
-		return "↑/↓ move  enter open  tab→ requests  h history  d dirs  ? help  q quit"
+		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"tab", "→ requests"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 	}
 }
 
@@ -273,7 +274,7 @@ func (a App) View() string {
 		body = a.browser.View()
 	}
 
-	footer := footerStyle.Render(a.footerHints())
+	footer := footerStyle.Render(renderHints(a.footerHints(), a.width-footerStyle.GetHorizontalPadding()))
 	if a.statusMsg != "" {
 		footer = statusStyle.Render(a.statusMsg) + "\n" + footer
 	}

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/dirhistory"
 	"github.com/Ahngbeom/rest-tui/internal/history"
@@ -358,5 +360,18 @@ func TestApp_StaleExecResultDoesNotLandOnNewRequestView(t *testing.T) {
 	entries, err := a.store.List(10)
 	if err != nil || len(entries) != 1 || entries[0].URL != srv.URL+"/slow" {
 		t.Errorf("history = %+v, %v, want the /slow send recorded", entries, err)
+	}
+}
+
+func TestApp_FooterKeepsHelpAndQuitAt80Columns(t *testing.T) {
+	a := newTestApp(t) // 80x24
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+	lines := strings.Split(a.View(), "\n")
+	last := lines[len(lines)-1]
+	if w := lipgloss.Width(last); w > 80 {
+		t.Errorf("footer width = %d, want <= 80: %q", w, last)
+	}
+	if plain := ansi.Strip(last); !strings.HasSuffix(strings.TrimRight(plain, " "), "? help  q quit") {
+		t.Errorf("footer = %q, want it to end with %q", plain, "? help  q quit")
 	}
 }
