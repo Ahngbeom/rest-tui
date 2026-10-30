@@ -16,6 +16,9 @@ type Request struct {
 	URL     string
 	Headers []Header
 	Body    string
+	// Unsupported lists IntelliJ features found in the block that rest-tui
+	// strips instead of running (scripts, output redirects), first-seen order.
+	Unsupported []string
 	// Line is the 1-indexed source line where this request's method/URL line starts.
 	Line int
 }

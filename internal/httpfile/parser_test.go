@@ -293,3 +293,80 @@ func TestParse_HeaderSectionCommentsSkipped(t *testing.T) {
 		t.Errorf("Headers = %v, want %v", f.Requests[0].Headers, want)
 	}
 }
+
+func TestParse_ResponseHandlerScriptRemovedFromBody(t *testing.T) {
+	src := "POST https://example.com\nContent-Type: application/json\n\n{\"a\": 1}\n\n> {%\n  client.global.set(\"x\", response.body.x);\n%}\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	req := f.Requests[0]
+	if req.Body != `{"a": 1}` {
+		t.Errorf("Body = %q", req.Body)
+	}
+	if want := []string{"response handler script"}; !reflect.DeepEqual(req.Unsupported, want) {
+		t.Errorf("Unsupported = %v, want %v", req.Unsupported, want)
+	}
+}
+
+func TestParse_HandlerFileAndOutputRedirectsRecorded(t *testing.T) {
+	src := "GET https://example.com\n\n> {% client.test(\"ok\", function() {}); %}\n>> ./out.json\n>>! ./out2.json\n> ./check.js\n> {% more(); %}\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	req := f.Requests[0]
+	if req.Body != "" {
+		t.Errorf("Body = %q, want empty", req.Body)
+	}
+	want := []string{"response handler script", "output redirect: ./out.json", "output redirect: ./out2.json", "response handler script: ./check.js"}
+	if !reflect.DeepEqual(req.Unsupported, want) {
+		t.Errorf("Unsupported = %v, want %v", req.Unsupported, want)
+	}
+}
+
+func TestParse_HandlerDirectlyAfterRequestLine(t *testing.T) {
+	f, err := Parse([]byte("GET https://example.com\n> {%\n  client.log(1);\n%}\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req := f.Requests[0]; len(req.Headers) != 0 || req.Body != "" || len(req.Unsupported) != 1 {
+		t.Errorf("request = %+v", req)
+	}
+}
+
+func TestParse_UnclosedHandlerConsumesRestOfBlockOnly(t *testing.T) {
+	src := "### a\nGET https://a.example\n\n> {%\n  client.log(1);\n\n### b\nGET https://b.example\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Requests) != 2 || f.Requests[0].Body != "" || f.Requests[1].URL != "https://b.example" {
+		t.Errorf("requests = %+v", f.Requests)
+	}
+}
+
+func TestParse_IndentedGreaterThanInBodyIsKept(t *testing.T) {
+	f, err := Parse([]byte("POST https://example.com\n\nline1\n  > quoted\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req := f.Requests[0]; req.Body != "line1\n  > quoted" || len(req.Unsupported) != 0 {
+		t.Errorf("Body = %q, Unsupported = %v", req.Body, req.Unsupported)
+	}
+}
+
+func TestParse_PreRequestScriptIsRemovedAndRecorded(t *testing.T) {
+	src := "### with script\n< {%\n  request.variables.set(\"id\", \"1\");\n%}\n< ./pre.js\nGET https://example.com/{{id}}\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	req := f.Requests[0]
+	if req.Name != "with script" || req.URL != "https://example.com/{{id}}" || req.Line != 6 {
+		t.Errorf("request = %+v", req)
+	}
+	if want := []string{"pre-request script", "pre-request script: ./pre.js"}; !reflect.DeepEqual(req.Unsupported, want) {
+		t.Errorf("Unsupported = %v, want %v", req.Unsupported, want)
+	}
+}

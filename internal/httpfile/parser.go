@@ -69,6 +69,7 @@ func Parse(data []byte) (*File, error) {
 func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *ParseError {
 	name := delimiterName
 	var req *Request
+	var pre []string
 	i := 0
 
 	// Skip/consume leading comments, blank lines, and file-scoped @var
@@ -90,12 +91,24 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 			f.Vars[k] = v
 			continue
 		}
+		if strings.HasPrefix(trimmed, "< {%") {
+			pre = addUnique(pre, "pre-request script")
+			for !strings.Contains(trimmed, "%}") && i+1 < len(block) {
+				i++
+				trimmed = strings.TrimSpace(block[i])
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "< ") || strings.HasPrefix(trimmed, "<\t") {
+			pre = addUnique(pre, "pre-request script: "+strings.TrimSpace(trimmed[1:]))
+			continue
+		}
 
 		method, url, ok := parseRequestLine(trimmed)
 		if !ok {
 			return &ParseError{Line: lineOffset + i + 1, Msg: "expected HTTP method and URL, got " + quote(trimmed)}
 		}
-		req = &Request{Name: name, Method: method, URL: url, Line: lineOffset + i + 1}
+		req = &Request{Name: name, Method: method, URL: url, Line: lineOffset + i + 1, Unsupported: pre}
 		i++
 		break
 	}
@@ -121,6 +134,9 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 
 	// Headers: consume "Name: value" lines until a blank line or EOF.
 	for ; i < len(block); i++ {
+		if strings.HasPrefix(block[i], ">") {
+			break
+		}
 		trimmed := strings.TrimSpace(block[i])
 		if trimmed == "" {
 			i++
@@ -138,11 +154,56 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 
 	// Body: remainder of the block, trimmed of surrounding blank lines.
 	if i < len(block) {
-		req.Body = strings.TrimRight(strings.Join(block[i:], "\n"), "\n \t")
+		body, unsupported := splitResponseHandlers(block[i:])
+		req.Body = strings.TrimRight(strings.Join(body, "\n"), "\n \t")
+		for _, u := range unsupported {
+			req.Unsupported = addUnique(req.Unsupported, u)
+		}
 	}
 
 	f.Requests = append(f.Requests, *req)
 	return nil
+}
+
+// splitResponseHandlers separates the request body from the trailing response
+// handler / output redirect section, which starts at the first line whose
+// column 0 is ">". Handler scripts are never run; they are only reported.
+func splitResponseHandlers(lines []string) (body []string, unsupported []string) {
+	start := len(lines)
+	for idx, l := range lines {
+		if strings.HasPrefix(l, ">") {
+			start = idx
+			break
+		}
+	}
+	body = lines[:start]
+	for j := start; j < len(lines); j++ {
+		l := strings.TrimSpace(lines[j])
+		switch {
+		case strings.HasPrefix(l, ">>!"):
+			unsupported = addUnique(unsupported, "output redirect: "+strings.TrimSpace(l[3:]))
+		case strings.HasPrefix(l, ">>"):
+			unsupported = addUnique(unsupported, "output redirect: "+strings.TrimSpace(l[2:]))
+		case strings.HasPrefix(l, "> {%"):
+			unsupported = addUnique(unsupported, "response handler script")
+			for !strings.Contains(l, "%}") && j+1 < len(lines) {
+				j++
+				l = lines[j]
+			}
+		case strings.HasPrefix(l, ">"):
+			unsupported = addUnique(unsupported, "response handler script: "+strings.TrimSpace(l[1:]))
+		}
+	}
+	return body, unsupported
+}
+
+func addUnique(list []string, s string) []string {
+	for _, v := range list {
+		if v == s {
+			return list
+		}
+	}
+	return append(list, s)
 }
 
 // stripCommentPrefix reports whether line is a "#" or "//" comment, returning
