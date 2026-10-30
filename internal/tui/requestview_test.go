@@ -931,3 +931,15 @@ func TestRequestModel_SentWithEnvShownAfterSwitch(t *testing.T) {
 		t.Errorf("content = %q, want (sent with env: dev)", plainText(content))
 	}
 }
+
+func TestRequestModelFromEntry_EnvLineShowsSendTimeEnv(t *testing.T) {
+	store := newTestHistoryStore(t)
+	m := newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: "https://example.com", Env: "dev"}, store)
+	if got, want := plainText(m.envLine()), "resolved at send time (env: dev)"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+	m, _ = newRequestModelFromEntry(history.Entry{Method: "GET", URL: "https://example.com"}, store)
+	if got, want := plainText(m.envLine()), "resolved at send time"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+}

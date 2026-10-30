@@ -249,7 +249,10 @@ func (a App) footerHints() []hint {
 		if a.request.isEditing() {
 			return []hint{{"ctrl+s", "apply"}, {"esc", "cancel"}}
 		}
-		hints := []hint{{"e", "cycle env"}}
+		var hints []hint
+		if a.request.canCycleEnv() {
+			hints = append(hints, hint{"e", "cycle env"})
+		}
 		if a.request.canSend() {
 			hints = append(hints, hint{"enter/ctrl+r", "send"})
 		}

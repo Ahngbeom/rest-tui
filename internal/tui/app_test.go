@@ -514,3 +514,28 @@ func TestApp_FooterHidesSendWhenBlocked(t *testing.T) {
 		assertViewFits(t, model.(App).View(), sz[0], sz[1])
 	}
 }
+
+func TestApp_FooterHidesCycleEnvWhenEnvCannotChange(t *testing.T) {
+	a := newTestApp(t)
+	writeNestedFile(t, filepath.Join(a.root, "http-client.env.json"), threeEnvs)
+	writeNestedFile(t, filepath.Join(a.root, "one", "http-client.env.json"), `{"dev": {}}`)
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	a = model.(App)
+	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
+
+	cases := []struct {
+		name string
+		msg  tea.Msg
+		want bool
+	}{
+		{"three envs", openRequestMsg{filePath: filepath.Join(a.root, "a.http"), file: &httpfile.File{}, req: req}, true},
+		{"one env", openRequestMsg{filePath: filepath.Join(a.root, "one", "a.http"), file: &httpfile.File{}, req: req}, false},
+		{"recent entry", openRequestFromEntryMsg{entry: history.Entry{Method: "GET", URL: "https://example.com", Env: "dev"}}, false},
+	}
+	for _, tc := range cases {
+		model, _ := a.Update(tc.msg)
+		if got := strings.Contains(footerLine(model.(App)), "cycle env"); got != tc.want {
+			t.Errorf("%s: footer has cycle env = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

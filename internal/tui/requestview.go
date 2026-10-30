@@ -66,6 +66,7 @@ type requestModel struct {
 	executing   bool
 	lastEntry   *history.Entry
 	entryEnv    string
+	fromEntry   bool
 	historyWarn string
 
 	copyStatus string
@@ -117,7 +118,7 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -140,7 +141,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -461,6 +462,12 @@ func (m requestModel) envLine() string {
 func (m requestModel) untruncatedEnvLine() string {
 	src := m.envSource
 	switch {
+	case m.fromEntry:
+		text := "resolved at send time"
+		if m.entryEnv != "" {
+			text += " (env: " + m.entryEnv + ")"
+		}
+		return mutedTextStyle.Render(text)
 	case m.envErr != nil:
 		return errorTextStyle.Render(strings.ReplaceAll(m.envErr.Error(), "\n", " "))
 	case src.Dir == "":
