@@ -8,7 +8,7 @@
 - IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환
 - 요청 실행 결과(상태 코드/헤더/바디)를 JSON 들여쓰기 + ANSI 컬러로 표시
 - 실행 히스토리 저장 및 조회, 과거 요청 재실행(rerun)
-- `-dir`로 열었던 디렉터리 이력 저장 및 조회, 다른 디렉터리로 즉시 전환(재스캔)
+- 열었던 디렉터리 이력 저장 및 조회, 다른 디렉터리로 즉시 전환(재스캔)
 - 키보드만으로 조작하는 화면 전환(파일 탐색 → 요청 → 히스토리 → 디렉터리 이력)
 
 ## Installation
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/Ahngbeom/rest-tui/main/scripts/inst
 ```
 
 - 지원 대상: linux/darwin × amd64/arm64 (Windows는 아래 "미리 빌드된 바이너리 다운로드" 또는 `go install` 사용)
-- 특정 버전 설치: `REST_TUI_VERSION=v0.1.0 curl -fsSL ... | bash`
+- 특정 버전 설치: `curl -fsSL https://raw.githubusercontent.com/Ahngbeom/rest-tui/main/scripts/install.sh | REST_TUI_VERSION=v0.1.0 bash`
 - 설치 후 `$HOME/.local/bin`이 PATH에 없다면 스크립트가 안내 문구를 출력합니다. 셸 설정 파일(`~/.bashrc`, `~/.zshrc` 등)에 다음을 추가하세요:
   ```sh
   export PATH="$HOME/.local/bin:$PATH"
@@ -64,30 +64,43 @@ scripts/build.sh --install  # 위와 동일하게 빌드한 뒤 $HOME/.local/bin
 ## Usage
 
 ```sh
-rest-tui -dir <path-to-http-files>
+rest-tui [flags] [dir]
 ```
 
 | 플래그 | 기본값 | 설명 |
 | --- | --- | --- |
 | `-dir` | `.` | `.http` 파일을 탐색할 디렉터리 |
-| `-config` | `~/.config/rest-tui/history.json` | 실행 히스토리를 저장할 파일 경로 |
-| `-version` | - | 버전 정보를 출력하고 종료 |
+| `-config` | `~/.config/rest-tui/history.json` | 히스토리 파일 경로(history file path) |
+| `-timeout` | `30s` | 요청 하나의 제한 시간(예: `10s`, `2m`). 0 이하는 오류 |
+| `-version` | - | 버전 정보를 출력하고 종료(`go install`로 설치한 빌드는 빌드 정보의 버전을 표시) |
+
+위치 인자 `dir`는 `-dir`와 같습니다. 둘을 함께 주었는데 서로 다른 디렉터리이면 오류로 종료합니다.
 
 ## Keybindings
 
-| 키 | 동작 |
-| --- | --- |
-| `q`, `Ctrl+C` | 종료 |
-| `?` | 도움말 토글 |
-| `Esc`, `Backspace` | 뒤로 가기 |
-| `Enter` | 항목 열기 / 요청 전송 |
-| `Ctrl+R` | 요청 전송 |
-| `Tab` | 패널(파일 ↔ 요청) 전환 |
-| `h` | 히스토리 화면으로 이동 |
-| `d` | 디렉터리 이력 화면으로 이동 |
-| `↑`/`k`, `↓`/`j` | 위/아래 이동 |
-| `r` | 선택한 히스토리 항목 재실행 |
-| `e` | 환경(env) 순환 전환 |
+앱 안에서 `?`를 누르면 같은 내용의 도움말이 열립니다.
+
+| 화면 | 키 | 동작 |
+|---|---|---|
+| 전체 | `q`, `Ctrl+C` | 종료(전송 중이면 `q`를 두 번) |
+| 전체 | `?` | 도움말 |
+| 전체 | `h` / `d` | History / Directories로 이동 |
+| 목록 | `↑`/`k`, `↓`/`j` | 이동 |
+| 목록 | `/` | 필터(`Esc`로 해제) |
+| Browser | `Enter` | 파일 열기 / Request view 열기 |
+| Browser | `Tab`, `Esc` | Files ↔ Requests 포커스 |
+| Browser | `R` | 현재 디렉터리 다시 스캔 |
+| Browser·Directories | `o` | 경로를 입력해 디렉터리 열기 |
+| Request view | `Enter`, `Ctrl+R` | 전송 |
+| Request view | `Esc`, `Backspace` | 전송 중이면 취소, 아니면 출발 화면(Browser/History)으로 |
+| Request view | `e` | env 순환 |
+| Request view | `i` / `Ctrl+S` / `Esc` | 편집 시작 / 적용 / 취소 |
+| Request view | `c`, `y` | 요청·응답 복사 |
+| Request view | `g`/`Home`, `G`/`End` | 응답 맨 위 / 맨 아래 |
+| History | `Enter` | 상세 보기 |
+| History | `r` | 재실행(GET·HEAD·OPTIONS 외에는 `y/n` 확인) |
+| History 상세 | `c`, `y` | 복사 |
+| Directories | `Enter` | 선택한 디렉터리로 전환 |
 
 ## Environment configuration
 
@@ -129,9 +142,13 @@ IntelliJ가 응답 저장용으로 남기는 `<> history.json` 참조 줄은 경
 
 요청을 전송하면 자동으로 히스토리에 기록됩니다. 기본 저장 위치는 `~/.config/rest-tui/history.json`이며 `-config`로 변경할 수 있습니다. 히스토리 화면(`h`)에서 과거 실행을 조회하고 `r`로 재실행할 수 있습니다.
 
+- 요청 헤더·본문·응답이 평문으로 저장되므로 `Authorization` 같은 비밀값도 그대로 남습니다(재실행을 정확히 하려고 마스킹하지 않습니다).
+- 파일 권한은 0600이며, 임시 파일에 쓴 뒤 교체하는 방식으로 저장합니다.
+- 최근 500건만 유지합니다.
+
 ## Directory history
 
-`-dir`로 실행할 때마다 해당 디렉터리가 `~/.config/rest-tui/dirs.json`에 자동으로 기록됩니다(고정 경로, 별도 플래그 없음). 디렉터리 이력 화면(`d`)에서 과거에 열었던 디렉터리 목록을 최근 사용 순으로 조회하고, `enter`로 선택하면 앱을 재시작하지 않고도 해당 디렉터리를 즉시 재스캔해 전환할 수 있습니다.
+실행할 때마다(존재하는 디렉터리만) 해당 디렉터리가 `~/.config/rest-tui/dirs.json`에 자동으로 기록됩니다(고정 경로, 별도 플래그 없음). 디렉터리 이력 화면(`d`)에서 과거에 열었던 디렉터리 목록을 최근 사용 순으로 조회하고, `Enter`로 선택하면 앱을 재시작하지 않고도 해당 디렉터리를 즉시 재스캔해 전환할 수 있습니다.
 
 ## Development
 
