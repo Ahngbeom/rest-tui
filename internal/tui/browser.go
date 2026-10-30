@@ -144,6 +144,7 @@ func (m browserModel) refreshRecent() browserModel {
 	}
 	m.requests.Title = "Recent"
 	m.requests.SetItems(items)
+	m.requests.Select(0)
 	return m
 }
 
@@ -180,6 +181,7 @@ func (m browserModel) selectFile() browserModel {
 		m.parseErr = err
 		m.parsedFile = nil
 		m.requests.SetItems(nil)
+		m.requests.Select(0)
 		return m
 	}
 
@@ -189,6 +191,7 @@ func (m browserModel) selectFile() browserModel {
 		items[i] = requestItem{req: r}
 	}
 	m.requests.SetItems(items)
+	m.requests.Select(0)
 
 	if len(f.Requests) == 0 && parseErr != nil {
 		// Every block failed to parse: nothing to show.

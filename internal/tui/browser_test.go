@@ -337,3 +337,32 @@ func TestBrowserModel_SelectFile_EmptyFileMovesFocusWithNoError(t *testing.T) {
 		t.Fatalf("requests.Items() = %d, want 0", len(m.requests.Items()))
 	}
 }
+
+func TestBrowserModel_SelectFileResetsRequestCursorToFirst(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "### one\nGET https://a.example/1\n\n### two\nGET https://a.example/2\n\n### three\nGET https://a.example/3\n")
+	writeTestFile(t, dir, "b.http", "GET https://b.example/only\n")
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 35)
+	key := func(m browserModel, k tea.KeyMsg) browserModel { m, _ = m.Update(k); return m }
+	j := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}
+
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter}) // open a.http
+	m = key(key(m, j), j)
+	if m.requests.Index() != 2 {
+		t.Fatalf("precondition: requests.Index() = %d, want 2", m.requests.Index())
+	}
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = key(m, j)
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter}) // open b.http
+
+	if m.requests.Index() != 0 {
+		t.Errorf("requests.Index() = %d, want 0 after switching files", m.requests.Index())
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on the only request did nothing")
+	}
+	if msg, ok := cmd().(openRequestMsg); !ok || msg.req.URL != "https://b.example/only" {
+		t.Errorf("cmd() = %#v, want openRequestMsg for b.example/only", cmd())
+	}
+}
