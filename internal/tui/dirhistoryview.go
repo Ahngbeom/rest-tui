@@ -54,13 +54,8 @@ func (m dirHistoryModel) refresh() dirHistoryModel {
 
 func (m dirHistoryModel) SetSize(width, height int) dirHistoryModel {
 	m.width, m.height = width, height
-	innerWidth, innerHeight := width-4, height-2
-	if innerWidth < 0 {
-		innerWidth = 0
-	}
-	if innerHeight < 0 {
-		innerHeight = 0
-	}
+	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
+	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize())
 	m.list.SetSize(innerWidth, innerHeight)
 	return m
 }
@@ -85,8 +80,11 @@ func (m dirHistoryModel) Update(msg tea.Msg) (dirHistoryModel, tea.Cmd) {
 }
 
 func (m dirHistoryModel) View() string {
+	pane := paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize()))
 	if m.loadErr != nil {
-		return paneFocusedStyle.Render(errorTextStyle.Render("failed to load directory history: " + m.loadErr.Error()))
+		msg := "failed to load directory history: " + m.loadErr.Error()
+		inner := fitLines(msg, max(0, m.width-pane.GetHorizontalFrameSize()), max(0, m.height-pane.GetVerticalFrameSize()))
+		return pane.Render(errorTextStyle.Render(inner))
 	}
-	return paneFocusedStyle.Render(m.list.View())
+	return pane.Render(m.list.View())
 }

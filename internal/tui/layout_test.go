@@ -76,6 +76,27 @@ var layoutScenarios = []layoutScenario{
 		root := filepath.Join(t.TempDir(), strings.Repeat("missing-directory-", 10))
 		return newLayoutApp(t, root, newTestHistoryStore(t), w, h)
 	}},
+	{"history-list", func(t *testing.T, w, h int) App {
+		return pressKeys(newLayoutHistoryApp(t, w, h), "h")
+	}},
+	{"history-detail-copy", func(t *testing.T, w, h int) App {
+		a := pressKeys(newLayoutHistoryApp(t, w, h), "h", "enter")
+		return applyMsg(a, clipboardCopyMsg{token: a.history.copyToken})
+	}},
+	{"dir-history", func(t *testing.T, w, h int) App {
+		return pressKeys(newLayoutHistoryApp(t, w, h), "d")
+	}},
+}
+
+func newLayoutHistoryApp(t *testing.T, w, h int) App {
+	t.Helper()
+	store := newTestHistoryStore(t)
+	for _, u := range []string{"https://example.com/a", "https://example.com/b"} {
+		if _, err := store.Append(history.Entry{Method: "GET", URL: u, StatusCode: 200, ResponseBody: strings.Repeat("line\n", 40)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return newLayoutApp(t, t.TempDir(), store, w, h)
 }
 
 func newLayoutRequestApp(t *testing.T, w, h int) App {

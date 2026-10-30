@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 )
@@ -273,5 +274,34 @@ func TestHistoryModel_ClipboardCopyExpiredMsgClearsStatus(t *testing.T) {
 	m, _ = m.Update(clipboardCopyExpiredMsg{token: 1})
 	if m.copyStatus != "" {
 		t.Errorf("copyStatus = %q, want cleared", m.copyStatus)
+	}
+}
+
+func TestHistoryModel_ListUsesFullWidth(t *testing.T) {
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+	view := newHistoryModel(store).refresh().SetSize(120, 20).View()
+	for i, ln := range strings.Split(view, "\n") {
+		if lipgloss.Width(ln) != 120 {
+			t.Errorf("line %d width = %d, want 120", i, lipgloss.Width(ln))
+		}
+	}
+}
+
+func TestHistoryModel_DetailCopyStatusKeepsHeight(t *testing.T) {
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, ResponseBody: strings.Repeat("line\n", 40)}); err != nil {
+		t.Fatal(err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(80, 20)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if h := lipgloss.Height(m.View()); h != 20 {
+		t.Fatalf("detail height = %d, want 20", h)
+	}
+	m, _ = m.Update(clipboardCopyMsg{token: m.copyToken})
+	if v := m.View(); lipgloss.Height(v) != 20 || !strings.Contains(v, "copied to clipboard") {
+		t.Errorf("after copy: height = %d", lipgloss.Height(v))
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/executor"
 	"github.com/Ahngbeom/rest-tui/internal/history"
@@ -137,15 +138,10 @@ func (m historyModel) refresh() historyModel {
 
 func (m historyModel) SetSize(width, height int) historyModel {
 	m.width, m.height = width, height
-	innerWidth, innerHeight := width-4, height-2
-	if innerWidth < 0 {
-		innerWidth = 0
-	}
-	if innerHeight < 0 {
-		innerHeight = 0
-	}
+	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
+	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize())
 	m.list.SetSize(innerWidth, innerHeight)
-	m.detail.Width, m.detail.Height = innerWidth, innerHeight
+	m.detail.Width, m.detail.Height = innerWidth, max(0, innerHeight-1) // last row: copy status
 	if m.mode == historyModeDetail && m.selected != nil {
 		m.detail.SetContent(wrapToWidth(renderEntryDetail(*m.selected), innerWidth))
 	}
@@ -220,19 +216,22 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 }
 
 func (m historyModel) View() string {
+	pane := paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize()))
 	if m.loadErr != nil {
-		return paneFocusedStyle.Render(errorTextStyle.Render("failed to load history: " + m.loadErr.Error()))
+		msg := "failed to load history: " + m.loadErr.Error()
+		inner := fitLines(msg, max(0, m.width-pane.GetHorizontalFrameSize()), max(0, m.height-pane.GetVerticalFrameSize()))
+		return pane.Render(errorTextStyle.Render(inner))
 	}
 	if m.mode == historyModeDetail {
-		content := m.detail.View()
+		status := ""
 		if m.copyStatus != "" {
 			style := copiedTextStyle
 			if m.copyErr {
 				style = errorTextStyle
 			}
-			content += "\n" + style.Render(m.copyStatus)
+			status = style.Render(ansi.Truncate(m.copyStatus, m.detail.Width, "…"))
 		}
-		return paneFocusedStyle.Render(content)
+		return pane.Render(m.detail.View() + "\n" + status)
 	}
-	return paneFocusedStyle.Render(m.list.View())
+	return pane.Render(m.list.View())
 }
