@@ -252,3 +252,10 @@ func TestEnvNames_ExcludesShared(t *testing.T) {
 		t.Errorf("EnvNames() = %v, want %v", got, want)
 	}
 }
+
+func TestSubstitute_DollarNameIsReportedMissing(t *testing.T) {
+	got, missing := Substitute("id={{$uuid}}", nil)
+	if got != "id={{$uuid}}" || !reflect.DeepEqual(missing, []string{"$uuid"}) {
+		t.Errorf("Substitute = %q, %v", got, missing)
+	}
+}

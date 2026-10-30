@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -78,13 +79,18 @@ type requestModel struct {
 	width, height      int
 
 	store *history.Store
+
+	now func() time.Time
+	rng *rand.Rand
 }
+
+func newRequestRand() *rand.Rand { return rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())) }
 
 // newRequestModel builds a Request view for a request selected in the
 // Browser, resolving {{var}} placeholders against the env files nearest the
 // request (searching up to root) plus the file's own @-scoped variables.
 func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel {
-	m := requestModel{id: nextRequestModelID(), filePath: filePath, root: root, file: file, req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), filePath: filePath, root: root, file: file, req: req, store: store, envIndex: -1, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -118,7 +124,7 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -144,7 +150,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -163,8 +169,16 @@ func (m *requestModel) recompute() {
 		envName = m.envNames[m.envIndex]
 	}
 	vars := env.Merge(m.envSource.Public, m.envSource.Private, envName, fileVars)
-	m.resolved, m.missingVars = env.ResolveRequest(m.req, vars)
+	m.resolved, m.missingVars = env.ResolveRequest(m.req, vars, m.resolveOptions())
 	m.refreshContent()
+}
+
+func (m requestModel) resolveOptions() env.ResolveOptions {
+	baseDir := ""
+	if m.filePath != "" {
+		baseDir = filepath.Dir(m.filePath)
+	}
+	return env.ResolveOptions{BaseDir: baseDir, Now: m.now(), Rand: m.rng}
 }
 
 func (m *requestModel) refreshContent() {
@@ -230,8 +244,9 @@ func (m requestModel) cancelEditing() requestModel {
 }
 
 // applyEdit reparses the edit buffer via httpfile.Parse and, on success,
-// replaces m.resolved with the edited text verbatim and recollects any
-// {{…}} placeholders left in it into m.missingVars. On failure it stays in
+// replaces m.resolved with the edited text, generating any {{$dynamic}}
+// variables in it. Other {{…}} placeholders stay literal and are collected
+// into m.missingVars so they block sending. On failure it stays in
 // edit mode with the buffer intact and sets m.editError.
 func (m requestModel) applyEdit() requestModel {
 	f, err := httpfile.Parse([]byte(m.editor.Value()))
@@ -245,13 +260,14 @@ func (m requestModel) applyEdit() requestModel {
 	}
 
 	parsed := f.Requests[0]
-	m.resolved = httpfile.Request{
-		Method:  parsed.Method,
-		URL:     parsed.URL,
-		Headers: parsed.Headers,
-		Body:    parsed.Body,
+	edited := httpfile.Request{
+		Method:      parsed.Method,
+		URL:         parsed.URL,
+		Headers:     parsed.Headers,
+		Body:        parsed.Body,
+		Unsupported: parsed.Unsupported,
 	}
-	_, m.missingVars = env.ResolveRequest(m.resolved, nil)
+	m.resolved, m.missingVars = env.ResolveRequest(edited, nil, m.resolveOptions())
 	m.edited = true
 	m.editing = false
 	m.editError = ""

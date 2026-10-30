@@ -967,3 +967,30 @@ func TestRequestModelFromEntry_EnvLineShowsSendTimeEnv(t *testing.T) {
 		t.Errorf("envLine = %q, want %q", got, want)
 	}
 }
+
+var uuidV4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func TestNewRequestModel_ResolvesDynamicVariableInPreview(t *testing.T) {
+	dir := t.TempDir()
+	req := httpfile.Request{Method: "GET", URL: "https://example.com", Headers: []httpfile.Header{{Name: "X-Request-Id", Value: "{{$uuid}}"}}}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+
+	if len(m.missingVars) != 0 || !uuidV4Pattern.MatchString(m.resolved.Headers[0].Value) {
+		t.Errorf("missingVars = %v, header = %q", m.missingVars, m.resolved.Headers[0].Value)
+	}
+	if !m.canSend() {
+		t.Error("canSend() = false, want true")
+	}
+}
+
+func TestRequestModel_ApplyEditResolvesDynamicVariables(t *testing.T) {
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "").SetSize(120, 30)
+	m = applyTestEdit(t, m, "GET https://example.com\nX-Request-Id: {{$uuid}}\nAuthorization: Bearer {{token}}\n")
+
+	if got := m.resolved.Headers[0].Value; !uuidV4Pattern.MatchString(got) {
+		t.Errorf("X-Request-Id = %q, want the generated UUID that will be sent", got)
+	}
+	if m.resolved.Headers[1].Value != "Bearer {{token}}" || !reflect.DeepEqual(m.missingVars, []string{"token"}) {
+		t.Errorf("Authorization = %q, missingVars = %v; a plain leftover placeholder must stay literal and block", m.resolved.Headers[1].Value, m.missingVars)
+	}
+}
