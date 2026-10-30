@@ -88,7 +88,8 @@ rest-tui [flags] [dir]
 | 목록 | `↑`/`k`, `↓`/`j` | 이동 |
 | 목록 | `/` | 필터(`Esc`로 해제) |
 | Browser | `Enter` | 파일 열기 / Request view 열기 |
-| Browser | `Tab`, `Esc` | Files ↔ Requests 포커스 |
+| Browser | `Tab` | Files ↔ Requests 포커스 전환 |
+| Browser | `Esc`, `Backspace` | Requests에서 Files로 포커스 |
 | Browser | `R` | 현재 디렉터리 다시 스캔 |
 | Browser·Directories | `o` | 경로를 입력해 디렉터리 열기 |
 | Request view | `Enter`, `Ctrl+R` | 전송 |
@@ -96,11 +97,15 @@ rest-tui [flags] [dir]
 | Request view | `e` | env 순환 |
 | Request view | `i` / `Ctrl+S` / `Esc` | 편집 시작 / 적용 / 취소 |
 | Request view | `c`, `y` | 요청·응답 복사 |
+| Request view | `↑`/`↓` | 응답 스크롤 |
 | Request view | `g`/`Home`, `G`/`End` | 응답 맨 위 / 맨 아래 |
 | History | `Enter` | 상세 보기 |
 | History | `r` | 재실행(GET·HEAD·OPTIONS 외에는 `y/n` 확인) |
+| History | `Esc`, `Backspace` | Browser로 돌아가기 |
+| History 상세 | `Esc`, `Backspace` | History 목록으로 돌아가기 |
 | History 상세 | `c`, `y` | 복사 |
 | Directories | `Enter` | 선택한 디렉터리로 전환 |
+| Directories | `Esc`, `Backspace` | Browser로 돌아가기 |
 
 ## Environment configuration
 
