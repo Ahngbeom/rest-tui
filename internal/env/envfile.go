@@ -16,6 +16,9 @@ import (
 const (
 	PublicFileName  = "http-client.env.json"
 	PrivateFileName = "http-client.private.env.json"
+
+	// SharedEnvName is the pseudo-environment whose values sit under every real one.
+	SharedEnvName = "$shared"
 )
 
 // LoadFiles reads the public and private environment files from dir. A
@@ -73,23 +76,27 @@ func loadOne(path string) (map[string]map[string]string, error) {
 }
 
 // Merge resolves the final variable map for envName using precedence
-// (highest first): fileVars, private[envName], public[envName].
+// (highest first): fileVars, private[envName], public[envName],
+// private[$shared], public[$shared]. The $shared layers apply even when
+// envName is empty.
 func Merge(public, private map[string]map[string]string, envName string, fileVars map[string]string) map[string]string {
 	result := map[string]string{}
-	for k, v := range public[envName] {
-		result[k] = v
-	}
-	for k, v := range private[envName] {
-		result[k] = v
-	}
-	for k, v := range fileVars {
-		result[k] = v
+	for _, layer := range []map[string]string{
+		public[SharedEnvName],
+		private[SharedEnvName],
+		public[envName],
+		private[envName],
+		fileVars,
+	} {
+		for k, v := range layer {
+			result[k] = v
+		}
 	}
 	return result
 }
 
 // EnvNames returns the sorted union of environment names declared in public
-// and private.
+// and private, excluding the $shared pseudo-environment.
 func EnvNames(public, private map[string]map[string]string) []string {
 	seen := map[string]bool{}
 	for name := range public {
@@ -98,6 +105,7 @@ func EnvNames(public, private map[string]map[string]string) []string {
 	for name := range private {
 		seen[name] = true
 	}
+	delete(seen, SharedEnvName)
 	names := make([]string, 0, len(seen))
 	for name := range seen {
 		names = append(names, name)

@@ -218,3 +218,37 @@ func TestLoadFiles_ErrorNamesFileByBaseName(t *testing.T) {
 		t.Fatalf("err = %v, want prefix %q", err, "http-client.env.json: ")
 	}
 }
+
+func TestMerge_SharedLayersUnderEveryEnv(t *testing.T) {
+	public := map[string]map[string]string{
+		"$shared": {"k1": "public-shared", "k2": "public-shared", "k3": "public-shared", "k4": "public-shared", "k5": "public-shared"},
+		"dev":     {"k1": "public-dev", "k2": "public-dev", "k3": "public-dev"},
+	}
+	private := map[string]map[string]string{
+		"$shared": {"k1": "private-shared", "k2": "private-shared", "k3": "private-shared", "k4": "private-shared"},
+		"dev":     {"k1": "private-dev", "k2": "private-dev"},
+	}
+	got := Merge(public, private, "dev", map[string]string{"k1": "file"})
+
+	want := map[string]string{"k1": "file", "k2": "private-dev", "k3": "public-dev", "k4": "private-shared", "k5": "public-shared"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Merge() = %v, want %v", got, want)
+	}
+}
+
+func TestMerge_SharedAppliesWithNoEnvSelected(t *testing.T) {
+	public := map[string]map[string]string{"$shared": {"host": "https://shared.example.com"}}
+	got := Merge(public, nil, "", nil)
+	if got["host"] != "https://shared.example.com" {
+		t.Errorf("host = %q", got["host"])
+	}
+}
+
+func TestEnvNames_ExcludesShared(t *testing.T) {
+	public := map[string]map[string]string{"$shared": {}, "prod": {}}
+	private := map[string]map[string]string{"$shared": {}, "dev": {}}
+	want := []string{"dev", "prod"}
+	if got := EnvNames(public, private); !reflect.DeepEqual(got, want) {
+		t.Errorf("EnvNames() = %v, want %v", got, want)
+	}
+}

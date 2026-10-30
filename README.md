@@ -5,7 +5,7 @@
 ## Features
 
 - 디렉터리를 재귀적으로 스캔해 `.http` 파일과 그 안의 요청 목록을 두 개의 패널로 탐색
-- IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환 (우선순위: 파일 변수 > private 환경 > public 환경)
+- IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환 (우선순위: 파일 변수 > private 환경 > public 환경 > private `$shared` > public `$shared`)
 - 요청 실행 결과(상태 코드/헤더/바디)를 JSON 들여쓰기 + ANSI 컬러로 표시
 - 실행 히스토리 저장 및 조회, 과거 요청 재실행(rerun)
 - `-dir`로 열었던 디렉터리 이력 저장 및 조회, 다른 디렉터리로 즉시 전환(재스캔)
@@ -97,7 +97,7 @@ rest-tui -dir <path-to-http-files>
 - `http-client.private.env.json` — 비공개 환경 변수 (일반적으로 `.gitignore` 대상)
 - 파일 상단의 `@name=value` — 해당 `.http` 파일에만 적용되는 변수
 
-변수 우선순위는 **파일 스코프 변수 > private 환경 > public 환경** 순입니다. 별도의 "컬렉션/워크스페이스" 개념은 없으며, `-dir`로 지정한 디렉터리 자체가 요청의 원천(source of truth)입니다.
+변수 우선순위는 **파일 스코프 변수 > private 환경 > public 환경 > private `$shared` > public `$shared`** 순입니다. `$shared` 값은 모든 환경에 기본값으로 깔리며 환경 목록에는 나오지 않습니다. 별도의 "컬렉션/워크스페이스" 개념은 없으며, `-dir`로 지정한 디렉터리 자체가 요청의 원천(source of truth)입니다.
 
 ## History
 
