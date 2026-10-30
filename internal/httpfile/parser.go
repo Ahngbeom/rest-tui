@@ -36,12 +36,16 @@ func parse(data []byte, verbatimBody bool) (*File, error) {
 
 	// blockStart[i] is the first line index (0-based) of block i; blocks are
 	// split on lines beginning with "###". Everything before the first "###"
-	// (or the whole file, if there is none) is block 0.
+	// (or the whole file, if there is none) is block 0. In verbatim mode the
+	// whole buffer is one block, so a "###" line inside the body stays body.
 	var blockStarts []int
 	if len(lines) > 0 && !strings.HasPrefix(strings.TrimSpace(lines[0]), "###") {
 		blockStarts = append(blockStarts, 0)
 	}
 	for i, line := range lines {
+		if verbatimBody && len(blockStarts) > 0 {
+			break
+		}
 		if strings.HasPrefix(strings.TrimSpace(line), "###") {
 			blockStarts = append(blockStarts, i)
 		}
@@ -270,18 +274,19 @@ func parseVarDecl(line string) (name, value string, ok bool) {
 }
 
 // parseRequestLine parses "[METHOD] URL [HTTP-VERSION]". The method may be
-// omitted, in which case it defaults to GET.
+// omitted, in which case it defaults to GET. The URL is everything between
+// the method and the version, so whitespace inside it (for example in
+// "{{$random.integer(1, 10)}}") is kept.
 func parseRequestLine(line string) (method, url string, ok bool) {
-	fields := strings.Fields(line)
-	if len(fields) >= 2 {
-		if m := strings.ToUpper(fields[0]); knownMethods[m] {
-			return m, fields[1], true
+	rest := httpVersionSuffixRe.ReplaceAllString(line, "")
+	if sp := strings.IndexAny(rest, " \t"); sp > 0 {
+		if m := strings.ToUpper(rest[:sp]); knownMethods[m] {
+			return m, strings.TrimSpace(rest[sp:]), true
 		}
 	}
-	if len(fields) == 1 || (len(fields) == 2 && strings.HasPrefix(strings.ToUpper(fields[1]), "HTTP/")) {
-		if looksLikeURL(fields[0]) {
-			return "GET", fields[0], true
-		}
+	url = strings.TrimSpace(rest)
+	if url != "" && looksLikeURL(url) {
+		return "GET", url, true
 	}
 	return "", "", false
 }
@@ -289,6 +294,8 @@ func parseRequestLine(line string) (method, url string, ok bool) {
 var (
 	schemeRe   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 	hostPathRe = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*(:[0-9]+)?([/?]\S*)?$`)
+
+	httpVersionSuffixRe = regexp.MustCompile(`(?i)\s+HTTP/[0-9]+(\.[0-9]+)?\s*$`)
 )
 
 // looksLikeURL reports whether s is plausibly a request target rather than a

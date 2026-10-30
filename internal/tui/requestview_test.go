@@ -481,7 +481,7 @@ func TestRequestModel_ApplyEditWrongRequestCountStaysInEditModeWithMessage(t *te
 		want string
 	}{
 		{name: "zero requests", text: "// just a comment\n", want: "expected exactly one request, got 0"},
-		{name: "two requests", text: "GET https://a.example.com\n### second\nGET https://b.example.com\n", want: "expected exactly one request, got 2"},
+		{name: "second request after ###", text: "GET https://a.example.com\n### second\nGET https://b.example.com\n", want: "line 3: expected header \"Name: value\", got \"GET https://b.example.com\""},
 	}
 
 	for _, tc := range cases {
@@ -1481,5 +1481,18 @@ func TestRequestModel_ResultLinesSanitizeErrorAndSentEnv(t *testing.T) {
 		if content, _ := m.buildContent(); strings.Contains(content, "\x1b]0;") || strings.Contains(content, "\x07") {
 			t.Errorf("content for %+v contains OSC sequence: %q", e, content)
 		}
+	}
+}
+
+func TestRequestModel_UnchangedApplyKeepsTripleHashBodyLine(t *testing.T) {
+	body := "intro\n### Heading\nmore"
+	m := newTestRequestModel(t, httpfile.Request{Method: "POST", URL: "http://example.com/", Body: body})
+	m, _ = m.startEditing()
+	m = m.applyEdit()
+	if m.editing || m.editError != "" {
+		t.Fatalf("editing = %v, editError = %q", m.editing, m.editError)
+	}
+	if m.resolved.Body != body {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, body)
 	}
 }

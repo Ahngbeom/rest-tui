@@ -459,3 +459,53 @@ func TestParseVerbatimBody_KeepsHandlerAndIncludeLinesInBody(t *testing.T) {
 		t.Errorf("Unsupported = %v, Headers = %+v", req.Unsupported, req.Headers)
 	}
 }
+
+func TestParse_RequestLineKeepsSpacesInsideURL(t *testing.T) {
+	cases := []struct{ src, wantMethod, wantURL string }{
+		{"GET http://example.com/?n={{$random.integer(1, 10)}}\n", "GET", "http://example.com/?n={{$random.integer(1, 10)}}"},
+		{"http://example.com/?n={{$random.integer(1, 10)}}\n", "GET", "http://example.com/?n={{$random.integer(1, 10)}}"},
+		{"POST http://example.com/?n={{$random.integer(1, 10)}} HTTP/1.1\n", "POST", "http://example.com/?n={{$random.integer(1, 10)}}"},
+		{"GET https://example.com/api http/2\n", "GET", "https://example.com/api"},
+	}
+	for _, c := range cases {
+		f, err := Parse([]byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if got := f.Requests[0]; got.Method != c.wantMethod || got.URL != c.wantURL {
+			t.Errorf("Parse(%q) = %s %q, want %s %q", c.src, got.Method, got.URL, c.wantMethod, c.wantURL)
+		}
+	}
+}
+
+func TestParse_ProseLineIsStillError(t *testing.T) {
+	src := "this is not a request line number 3 with extra words\n"
+	if _, err := Parse([]byte(src)); err == nil {
+		t.Errorf("Parse(%q) err = nil, want a parse error", src)
+	}
+}
+
+func TestParseVerbatimBody_TripleHashLineInBodyDoesNotSplit(t *testing.T) {
+	src := "POST http://example.com/\n\nintro\n### Heading\nmore\n"
+	f, err := ParseVerbatimBody([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Requests) != 1 {
+		t.Fatalf("got %d requests, want 1: %+v", len(f.Requests), f.Requests)
+	}
+	if want := "intro\n### Heading\nmore"; f.Requests[0].Body != want {
+		t.Errorf("Body = %q, want %q", f.Requests[0].Body, want)
+	}
+}
+
+func TestParseVerbatimBody_LeadingDelimiterStillNamesRequest(t *testing.T) {
+	src := "### Create\nPOST http://example.com/\n\nintro\n### Heading\n"
+	f, err := ParseVerbatimBody([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Requests) != 1 || f.Requests[0].Name != "Create" || f.Requests[0].Body != "intro\n### Heading" {
+		t.Errorf("Requests = %+v, want one named Create with body %q", f.Requests, "intro\n### Heading")
+	}
+}
