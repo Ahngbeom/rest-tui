@@ -327,7 +327,11 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		entry := msg.entry
 		m.lastEntry = &entry
 		m.historyWarn = msg.historyWarn
-		m.refreshContent()
+		if m.edited {
+			m.refreshContent()
+		} else {
+			m.recompute()
+		}
 		m.scrollToResponse()
 		return m, nil
 	case clipboardCopyMsg:
@@ -420,7 +424,12 @@ func (m requestModel) copyText() string {
 	default:
 		resp = responseFromEntry(*m.lastEntry)
 	}
-	return output.RenderTransaction(m.resolved, resp, note, output.Options{Color: false})
+	req := m.resolved
+	if !m.executing && m.lastEntry != nil {
+		req.Method, req.URL = m.lastEntry.Method, m.lastEntry.URL
+		req.Headers, req.Body = m.lastEntry.RequestHeaders, m.lastEntry.RequestBody
+	}
+	return output.RenderTransaction(req, resp, note, output.Options{Color: false})
 }
 
 func (m requestModel) buildContent() (string, int) {

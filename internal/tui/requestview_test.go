@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1090,5 +1092,94 @@ func TestRequestModel_PreviewSanitizesIncludedFileContent(t *testing.T) {
 		if strings.Contains(content, bad) {
 			t.Errorf("preview contains %q", bad)
 		}
+	}
+}
+
+func dynamicTestModel(t *testing.T, url string) requestModel {
+	t.Helper()
+	dir := t.TempDir()
+	req := httpfile.Request{Method: "GET", URL: url, Headers: []httpfile.Header{{Name: "X-Request-Id", Value: "{{$uuid}}"}}}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+	m.now = func() time.Time { return time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC) }
+	m.rng = rand.New(rand.NewPCG(1, 2))
+	m.recompute()
+	return m.SetSize(120, 30)
+}
+
+func TestRequestModel_SendsDisplayedDynamicValue(t *testing.T) {
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("X-Request-Id")
+	}))
+	defer srv.Close()
+
+	m := dynamicTestModel(t, srv.URL)
+	shown := m.resolved.Headers[0].Value
+	content, _ := m.buildContent()
+	if !strings.Contains(ansiEscapePattern.ReplaceAllString(content, ""), "X-Request-Id: "+shown) {
+		t.Fatalf("preview does not show %q", shown)
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	res := cmd().(execResultMsg)
+	if sent := <-got; sent != shown {
+		t.Errorf("sent X-Request-Id = %q, preview showed %q", sent, shown)
+	}
+	if res.modelID != m.id {
+		t.Errorf("modelID = %d, want %d", res.modelID, m.id)
+	}
+}
+
+func TestRequestModel_RegeneratesDynamicValuesAfterSend(t *testing.T) {
+	m := dynamicTestModel(t, "https://example.com")
+	shown := m.resolved.Headers[0].Value
+
+	m = m.SetSize(80, 24)
+	if m.resolved.Headers[0].Value != shown {
+		t.Fatal("SetSize regenerated the dynamic value")
+	}
+	m.executing = true
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200,
+		RequestHeaders: []httpfile.Header{{Name: "X-Request-Id", Value: shown}}}})
+	next := m.resolved.Headers[0].Value
+	if next == shown || !uuidV4Pattern.MatchString(next) {
+		t.Errorf("after send header = %q, want a fresh UUID different from %q", next, shown)
+	}
+}
+
+func TestRequestModel_StaleResultDoesNotRegenerate(t *testing.T) {
+	m := dynamicTestModel(t, "https://example.com")
+	shown := m.resolved.Headers[0].Value
+	m, _ = m.Update(execResultMsg{modelID: m.id + 1, entry: history.Entry{StatusCode: 200}})
+	if m.resolved.Headers[0].Value != shown {
+		t.Error("a result for another Request view regenerated this view's values")
+	}
+}
+
+func TestRequestModel_KeepsEditedValuesAfterSend(t *testing.T) {
+	m := dynamicTestModel(t, "https://example.com")
+	m, _ = m.startEditing()
+	m.editor.SetValue("GET https://example.com\nX-Request-Id: fixed\n")
+	m = m.applyEdit()
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200}})
+	if m.resolved.Headers[0].Value != "fixed" {
+		t.Errorf("header = %q, applied edits must survive a send", m.resolved.Headers[0].Value)
+	}
+}
+
+func TestRequestModel_CopyTextUsesSentRequestAfterRegenerate(t *testing.T) {
+	m := dynamicTestModel(t, "https://example.com")
+	shown := m.resolved.Headers[0].Value
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200,
+		RequestHeaders: []httpfile.Header{{Name: "X-Request-Id", Value: shown}}, ResponseBody: `{"ok":true}`}})
+	if m.resolved.Headers[0].Value == shown {
+		t.Fatal("precondition: the dynamic value was not regenerated after the send")
+	}
+	got := m.copyText()
+	if !strings.Contains(got, "X-Request-Id: "+shown) || strings.Contains(got, m.resolved.Headers[0].Value) {
+		t.Errorf("copyText() = %q, want the sent value %q", got, shown)
+	}
+	m.executing = true
+	if got := m.copyText(); !strings.Contains(got, "X-Request-Id: "+m.resolved.Headers[0].Value) {
+		t.Errorf("copyText() while resending = %q, want the request being sent", got)
 	}
 }
