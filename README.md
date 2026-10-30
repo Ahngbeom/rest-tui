@@ -5,7 +5,7 @@
 ## Features
 
 - 디렉터리를 재귀적으로 스캔해 `.http` 파일과 그 안의 요청 목록을 두 개의 패널로 탐색
-- IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환 (우선순위: 파일 변수 > private 환경 > public 환경 > private `$shared` > public `$shared`)
+- IntelliJ 스타일 `http-client.env.json` / `http-client.private.env.json` 환경 파일과 파일 스코프 `@name=value` 변수를 이용한 `{{var}}` 치환
 - 요청 실행 결과(상태 코드/헤더/바디)를 JSON 들여쓰기 + ANSI 컬러로 표시
 - 실행 히스토리 저장 및 조회, 과거 요청 재실행(rerun)
 - `-dir`로 열었던 디렉터리 이력 저장 및 조회, 다른 디렉터리로 즉시 전환(재스캔)
@@ -91,15 +91,38 @@ rest-tui -dir <path-to-http-files>
 
 ## Environment configuration
 
-IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다. 환경 파일은 `.http` 파일이 있는 디렉터리에서 시작해 `-dir` 루트까지 위로 올라가며 처음 발견되는(가장 가까운 상위) 디렉터리의 것을 사용합니다.
-
-`{{변수}}`가 해석되지 않은 요청은 Enter로 보낼 수 없으며, 이유는 상태 줄에 표시됩니다. `e`로 고른 환경은 세션 동안 유지되어 이후 열리는 요청에도 적용됩니다(해당 환경이 없는 폴더에서는 첫 환경으로 열립니다).
+IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다.
 
 - `http-client.env.json` — 공개 환경 변수 (버전 관리 대상)
 - `http-client.private.env.json` — 비공개 환경 변수 (일반적으로 `.gitignore` 대상)
 - 파일 상단의 `@name=value` — 해당 `.http` 파일에만 적용되는 변수
 
-변수 우선순위는 **파일 스코프 변수 > private 환경 > public 환경 > private `$shared` > public `$shared`** 순입니다. `$shared` 값은 모든 환경에 기본값으로 깔리며 환경 목록에는 나오지 않습니다. 별도의 "컬렉션/워크스페이스" 개념은 없으며, `-dir`로 지정한 디렉터리 자체가 요청의 원천(source of truth)입니다.
+규칙은 다음과 같습니다.
+
+- **탐색**: `.http` 파일의 폴더부터 `-dir` 루트까지 위로 올라가며 두 파일 중 하나라도 있는 가장 가까운 폴더 하나를 사용합니다. `http-client.env.json`과 `http-client.private.env.json`은 그 폴더에서 짝으로 읽으며, 루트 위로는 올라가지 않습니다.
+- **우선순위**: 파일 변수 > private[env] > public[env] > private[`$shared`] > public[`$shared`] 순입니다. `$shared`는 모든 환경에 기본값으로 깔리며 환경 목록에는 나오지 않습니다.
+- **값**: 숫자와 bool은 문자열로 사용하고, 객체·배열·`null`(`SSLConfiguration` 등)은 건너뜁니다.
+
+`{{변수}}`가 해석되지 않은 요청은 Enter로 보낼 수 없으며, 이유는 상태 줄에 표시됩니다. `e`로 고른 환경은 세션 동안 유지되어 이후 열리는 요청에도 적용됩니다(해당 환경이 없는 폴더에서는 첫 환경으로 열립니다). 별도의 "컬렉션/워크스페이스" 개념은 없으며, `-dir`로 지정한 디렉터리 자체가 요청의 원천(source of truth)입니다.
+
+## IntelliJ HTTP Client compatibility
+
+| 기능 | 상태 | 비고 |
+|---|---|---|
+| `{{var}}`, `@name = value`, `# @name` | 지원 | |
+| 메서드 생략(`{{host}}/users`) | 지원 | GET으로 보낸다 |
+| 들여 쓴 `?…`·`&…` 쿼리 줄 | 지원 | |
+| 헤더 구간의 `#`·`//` 주석 | 지원 | |
+| `< ./file` 본문(multipart part 포함) | 지원 | `.http` 파일 기준 상대 경로. 파일이 없으면 전송을 막는다 |
+| `$uuid`, `$random.uuid`, `$timestamp`, `$isoTimestamp`, `$randomInt`, `$random.integer(min, max)`, `$random.alphabetic(n)`, `$random.alphanumeric(n)`, `$random.hexadecimal(n)`, `$random.email` | 지원 | 미리보기에 보인 값을 보내고, 전송 뒤 새로 만든다 |
+| 스킴 없는 URL(`localhost:8080/x`) | 지원 | `http://`를 붙인다 |
+| `> {% … %}`, `> handler.js` 응답 핸들러 | 무시+경고 | 본문에서 빼고 `unsupported (ignored): …`를 표시한다. JS는 실행하지 않는다 |
+| `>> file`, `>>! file` 출력 리디렉션 | 무시+경고 | |
+| `< {% … %}`, `< pre.js` pre-request script | 무시+경고 | |
+| 그 밖의 `$` 변수(`$random.float`, `$env.*`, `$processEnv`, `$dotenv`, `$exampleServer` 등) | 미지원 | 해결되지 않은 변수로 보고 전송을 막는다 |
+| `# @no-redirect`, `# @timeout` 등 요청 지시어, gRPC·WebSocket·GraphQL 요청 | 미지원 | |
+
+IntelliJ가 응답 저장용으로 남기는 `<> history.json` 참조 줄은 경고 없이 본문에서 뺍니다.
 
 ## History
 
