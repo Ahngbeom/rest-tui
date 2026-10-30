@@ -1,9 +1,12 @@
 package history
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -249,5 +252,151 @@ func TestStore_EnvRoundTripsAndIsOmittedWhenEmpty(t *testing.T) {
 	got, _ := s.List(1)
 	if got[0].Env != "dev" {
 		t.Errorf("Env = %q, want dev", got[0].Env)
+	}
+}
+
+func skipIfNoPermEnforcement(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permission bits are not enforced here")
+	}
+}
+
+func TestStore_NewFileHasMode0600(t *testing.T) {
+	skipIfNoPermEnforcement(t)
+	s, path := newTestStore(t)
+	if _, err := s.Append(Entry{Method: "GET", URL: "u"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %v, want 0600", got)
+	}
+}
+
+func TestStore_AppendTightensExistingFileTo0600(t *testing.T) {
+	skipIfNoPermEnforcement(t)
+	s, path := newTestStore(t)
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(Entry{URL: "u"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %v, want 0600", got)
+	}
+}
+
+func TestStore_AppendKeepsNewest500(t *testing.T) {
+	s, path := newTestStore(t)
+	seed := make([]Entry, 500)
+	for i := range seed {
+		seed[i] = Entry{ID: fmt.Sprintf("id%d", i), URL: fmt.Sprintf("u%d", i)}
+	}
+	data, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(Entry{URL: "new"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, err := s.List(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 500 {
+		t.Fatalf("len = %d, want 500", len(got))
+	}
+	if got[0].URL != "new" || got[499].URL != "u1" {
+		t.Errorf("got[0]=%q got[499]=%q, want new / u1", got[0].URL, got[499].URL)
+	}
+}
+
+func TestStore_AppendLeavesNoTempFiles(t *testing.T) {
+	s, path := newTestStore(t)
+	for i := 0; i < 2; i++ {
+		if _, err := s.Append(Entry{URL: "u"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	files, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range files {
+		names = append(names, f.Name())
+	}
+	if !reflect.DeepEqual(names, []string{"history.json"}) {
+		t.Errorf("dir contents = %v, want [history.json]", names)
+	}
+}
+
+func TestStore_FailedWriteKeepsOriginal(t *testing.T) {
+	skipIfNoPermEnforcement(t)
+	s, path := newTestStore(t)
+	if _, err := s.Append(Entry{URL: "first"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	if _, err := s.Append(Entry{URL: "second"}); err == nil {
+		t.Fatal("expected error when directory is read-only")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("original file changed after failed write")
+	}
+}
+
+func TestStore_NameAndRedirectsRoundTrip(t *testing.T) {
+	s, _ := newTestStore(t)
+	want := Entry{Name: "Create user", Redirects: []string{"302 \u2192 GET http://x/new"}}
+	saved, err := s.Append(want)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, err := s.Get(saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != want.Name || !reflect.DeepEqual(got.Redirects, want.Redirects) {
+		t.Errorf("round trip: Name=%q Redirects=%v", got.Name, got.Redirects)
+	}
+
+	s2, path2 := newTestStore(t)
+	if _, err := s2.Append(Entry{URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Redirects", `"Name"`} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("empty entry file should not contain %s:\n%s", key, raw)
+		}
 	}
 }

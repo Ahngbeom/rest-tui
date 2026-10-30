@@ -13,6 +13,8 @@ import (
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
+const maxEntries = 500
+
 // Entry is one recorded execution.
 type Entry struct {
 	ID              string
@@ -31,6 +33,10 @@ type Entry struct {
 	Error string
 	// Env is the env name the request was sent with; empty when none was selected.
 	Env string `json:"Env,omitempty"`
+	// Name is the request name (the "### name" line); empty when unnamed.
+	Name string `json:",omitempty"`
+	// Redirects lists the redirect hops followed before the final response.
+	Redirects []string `json:",omitempty"`
 }
 
 // Store reads and appends Entry records to a JSON file on disk.
@@ -85,6 +91,9 @@ func (s *Store) Append(e Entry) (Entry, error) {
 		e.ID = fmt.Sprintf("%s-%04d", e.Timestamp.UTC().Format("20060102T150405.000000000"), len(entries))
 	}
 	entries = append(entries, e)
+	if len(entries) > maxEntries {
+		entries = entries[len(entries)-maxEntries:]
+	}
 
 	if err := s.save(entries); err != nil {
 		return Entry{}, err
@@ -155,12 +164,35 @@ func (s *Store) load() ([]Entry, error) {
 }
 
 func (s *Store) save(entries []Entry) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
