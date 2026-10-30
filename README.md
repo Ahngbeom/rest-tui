@@ -116,10 +116,11 @@ IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스
 | `< ./file` 본문(multipart part 포함) | 지원 | `.http` 파일 기준 상대 경로. 파일이 없으면 전송을 막는다 |
 | `$uuid`, `$random.uuid`, `$timestamp`, `$isoTimestamp`, `$randomInt`, `$random.integer(min, max)`, `$random.alphabetic(n)`, `$random.alphanumeric(n)`, `$random.hexadecimal(n)`, `$random.email` | 지원 | 미리보기에 보인 값을 보내고, 전송 뒤 새로 만든다 |
 | 스킴 없는 URL(`localhost:8080/x`) | 지원 | `http://`를 붙인다 |
-| `> {% … %}`, `> handler.js` 응답 핸들러 | 무시+경고 | 본문에서 빼고 `unsupported (ignored): …`를 표시한다. JS는 실행하지 않는다 |
+| `> {% … %}`, `> handler.js` 응답 핸들러 | 무시+경고 | 본문에서 빼고 `unsupported (ignored): …`를 표시한다. JS는 실행하지 않는다. 본문에서 맨 앞 칸이 `>`인 줄은 핸들러의 시작으로 보므로, 그 줄부터 아래 본문은 모두 빠진다(들여 쓴 `>` 줄은 본문에 남는다) |
 | `>> file`, `>>! file` 출력 리디렉션 | 무시+경고 | |
 | `< {% … %}`, `< pre.js` pre-request script | 무시+경고 | |
 | 그 밖의 `$` 변수(`$random.float`, `$env.*`, `$processEnv`, `$dotenv`, `$exampleServer` 등) | 미지원 | 해결되지 않은 변수로 보고 전송을 막는다 |
+| `<@ ./file` 변수 치환 포함 본문 | 미지원 | 파일을 읽지 않고 `<@ …` 줄을 그대로 보낸다. 경고는 없다 |
 | `# @no-redirect`, `# @timeout` 등 요청 지시어, gRPC·WebSocket·GraphQL 요청 | 미지원 | |
 
 IntelliJ가 응답 저장용으로 남기는 `<> history.json` 참조 줄은 경고 없이 본문에서 뺍니다.
