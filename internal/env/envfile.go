@@ -4,26 +4,28 @@
 package env
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 )
 
 const (
-	publicFileName  = "http-client.env.json"
-	privateFileName = "http-client.private.env.json"
+	PublicFileName  = "http-client.env.json"
+	PrivateFileName = "http-client.private.env.json"
 )
 
 // LoadFiles reads the public and private environment files from dir. A
 // missing file yields a nil map for that side, not an error.
 func LoadFiles(dir string) (public, private map[string]map[string]string, err error) {
-	public, err = loadOne(filepath.Join(dir, publicFileName))
+	public, err = loadOne(filepath.Join(dir, PublicFileName))
 	if err != nil {
 		return nil, nil, err
 	}
-	private, err = loadOne(filepath.Join(dir, privateFileName))
+	private, err = loadOne(filepath.Join(dir, PrivateFileName))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,9 +40,34 @@ func loadOne(path string) (map[string]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var envs map[string]map[string]string
-	if err := json.Unmarshal(data, &envs); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	envs := map[string]map[string]string{}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return envs, nil
+	}
+	// UseNumber keeps large integers exact; decoding into float64 would rewrite them.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw map[string]any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	for name, v := range raw {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		vars := map[string]string{}
+		for k, val := range obj {
+			switch x := val.(type) {
+			case string:
+				vars[k] = x
+			case json.Number:
+				vars[k] = x.String()
+			case bool:
+				vars[k] = strconv.FormatBool(x)
+			}
+		}
+		envs[name] = vars
 	}
 	return envs, nil
 }

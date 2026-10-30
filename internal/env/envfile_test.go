@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -152,5 +153,68 @@ func TestSubstitute_DuplicatePlaceholderCountsOnceInMissing(t *testing.T) {
 	want := []string{"id"}
 	if !reflect.DeepEqual(missing, want) {
 		t.Errorf("missing = %v, want %v", missing, want)
+	}
+}
+
+func TestLoadFiles_StringifiesScalarValues(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, PublicFileName, `{"local": {
+		"host": "http://127.0.0.1:18091", "port": 18091, "debug": true, "off": false,
+		"ratio": 1.5, "big": 12345678901234567890,
+		"SSLConfiguration": {"clientCertificate": "a.pem"}, "list": [1, 2]
+	}}`)
+
+	public, _, err := LoadFiles(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]string{
+		"host": "http://127.0.0.1:18091", "port": "18091", "debug": "true", "off": "false",
+		"ratio": "1.5", "big": "12345678901234567890",
+	}
+	if !reflect.DeepEqual(public["local"], want) {
+		t.Errorf("local = %v, want %v", public["local"], want)
+	}
+}
+
+func TestLoadFiles_SkipsNullAndNonObjectEnvs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, PublicFileName, `{"dev": "oops", "qa": null, "prod": {"a": "b", "n": null}}`)
+
+	public, _, err := LoadFiles(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]map[string]string{"prod": {"a": "b"}}
+	if !reflect.DeepEqual(public, want) {
+		t.Errorf("public = %v, want %v", public, want)
+	}
+}
+
+func TestLoadFiles_EmptyFileYieldsNonNilMap(t *testing.T) {
+	for _, content := range []string{`{}`, ``, " \n"} {
+		dir := t.TempDir()
+		writeFile(t, dir, PrivateFileName, content)
+
+		public, private, err := LoadFiles(dir)
+		if err != nil {
+			t.Fatalf("content %q: unexpected error: %v", content, err)
+		}
+		if public != nil {
+			t.Errorf("content %q: public = %v, want nil (file absent)", content, public)
+		}
+		if private == nil {
+			t.Errorf("content %q: private = nil, want non-nil map (file present)", content)
+		}
+	}
+}
+
+func TestLoadFiles_ErrorNamesFileByBaseName(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, PublicFileName, `{ not valid json `)
+
+	_, _, err := LoadFiles(dir)
+	if err == nil || !strings.HasPrefix(err.Error(), "http-client.env.json: ") {
+		t.Fatalf("err = %v, want prefix %q", err, "http-client.env.json: ")
 	}
 }
