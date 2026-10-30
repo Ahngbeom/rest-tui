@@ -143,7 +143,15 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 	return m
 }
 
+// recompute rebuilds m.resolved from m.req. A history entry was resolved
+// when it was first sent, so fromEntry models keep it byte for byte: no
+// placeholder blocks the send and no dynamic value is regenerated.
 func (m *requestModel) recompute() {
+	if m.fromEntry {
+		m.resolved, m.missingVars = m.req, nil
+		m.refreshContent()
+		return
+	}
 	fileVars := map[string]string{}
 	if m.file != nil {
 		fileVars = m.file.Vars

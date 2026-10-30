@@ -237,9 +237,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case rerunMsg:
 		a = a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store), screenHistory)
-		if !a.request.canSend() {
-			return a, nil
-		}
 		var cmd tea.Cmd
 		a.request, cmd = a.request.startSend()
 		return a, cmd

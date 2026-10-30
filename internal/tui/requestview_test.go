@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -719,18 +720,57 @@ func TestRequestModel_EnvLineParseErrorNamesAncestorFolder(t *testing.T) {
 	}
 }
 
-func TestApp_UnresolvedRerunMsgIsNotSent(t *testing.T) {
+func TestApp_RerunMsgSendsStoredPlaceholdersVerbatim(t *testing.T) {
+	const storedBody = `{"name":"{{name}}","id":"{{$uuid}}"}`
+	type seen struct{ path, header, body string }
+	got := make(chan seen, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- seen{r.URL.Path, r.Header.Get("X-Id"), string(b)}
+	}))
+	defer srv.Close()
+	entry := history.Entry{Method: "POST", URL: srv.URL + "/{{id}}", RequestHeaders: []httpfile.Header{{Name: "X-Id", Value: "{{$uuid}}"}}, RequestBody: storedBody}
+
 	a := newTestApp(t)
-	model, cmd := a.Update(rerunMsg{entry: history.Entry{Method: "GET", URL: "https://example.com/{{id}}"}})
+	model, cmd := a.Update(rerunMsg{entry: entry})
+	a = model.(App)
+	if cmd == nil || !a.request.executing {
+		t.Fatalf("cmd = %v, executing = %v; a stored request must be resent as recorded", cmd, a.request.executing)
+	}
+	msg := awaitMsg[execResultMsg](t, cmd)
+	if s := <-got; s.path != "/{{id}}" || s.header != "{{$uuid}}" || s.body != storedBody {
+		t.Errorf("server saw path %q, X-Id %q, body %q; want the stored bytes unchanged", s.path, s.header, s.body)
+	}
+	if msg.entry.RequestBody != storedBody {
+		t.Errorf("recorded body = %q, want %q", msg.entry.RequestBody, storedBody)
+	}
+	a = applyMsg(a, msg)
+	if a.request.resolved.Body != storedBody || a.request.resolved.Headers[0].Value != "{{$uuid}}" {
+		t.Errorf("after send resolved = %+v, want the stored request, not regenerated values", a.request.resolved)
+	}
+}
+
+func TestRequestModel_FromEntryKeepsStoredDynamicLiteral(t *testing.T) {
+	const storedBody = `{"id":"{{$uuid}}"}`
+	m := newRequestModelFromEntryNoSend(history.Entry{Method: "POST", URL: "https://example.com", RequestBody: storedBody}, newTestHistoryStore(t))
+	if m.resolved.Body != storedBody {
+		t.Errorf("at open resolved.Body = %q, want %q", m.resolved.Body, storedBody)
+	}
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200}})
+	if m.resolved.Body != storedBody {
+		t.Errorf("after send resolved.Body = %q, want %q", m.resolved.Body, storedBody)
+	}
+}
+
+func TestApp_RecentEntryWithLiteralPlaceholderIsSendable(t *testing.T) {
+	a := newTestApp(t)
+	model, _ := a.Update(openRequestFromEntryMsg{entry: history.Entry{Method: "GET", URL: "https://example.com/{{name}}"}})
 	m := model.(App).request
-	if cmd != nil {
-		t.Error("cmd != nil, want no send for an unresolved entry")
+	if !m.canSend() || m.missingVars != nil {
+		t.Errorf("canSend = %v, missingVars = %v, want a stored request to be sendable", m.canSend(), m.missingVars)
 	}
-	if m.executing {
-		t.Error("executing = true, want false")
-	}
-	if got := plainText(m.SetSize(120, 30).statusLine()); !strings.Contains(got, "cannot send") {
-		t.Errorf("statusLine = %q, want cannot-send notice", got)
+	if got := plainText(m.SetSize(120, 30).statusLine()); strings.Contains(got, "cannot send") {
+		t.Errorf("statusLine = %q, want no cannot-send notice", got)
 	}
 }
 
@@ -1450,7 +1490,7 @@ func TestRequestModel_EscWhileSendingCancelsAndRecordsCanceled(t *testing.T) {
 }
 
 func TestRequestModel_BlockedMessageOmitsEnvHintWhenEnvCannotCycle(t *testing.T) {
-	m := newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: "{{host}}/x"}, newTestHistoryStore(t)).SetSize(200, 30)
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "{{host}}/x"}).SetSize(200, 30)
 	if m.canCycleEnv() || m.canSend() {
 		t.Fatalf("precondition: canCycleEnv = %v, canSend = %v", m.canCycleEnv(), m.canSend())
 	}
