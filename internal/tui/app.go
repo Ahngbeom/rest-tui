@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -45,8 +46,9 @@ type App struct {
 	dirStore *dirhistory.Store
 	root     string
 
-	showHelp  bool
-	statusMsg string
+	showHelp     bool
+	helpViewport viewport.Model
+	statusMsg    string
 }
 
 // NewApp builds the root model. root is the directory .http files are
@@ -63,6 +65,8 @@ func NewApp(root string, store *history.Store, dirStore *dirhistory.Store) App {
 	a.request = newRequestModel("", &httpfile.File{}, httpfile.Request{}, store)
 	a.history = newHistoryModel(store)
 	a.dirHistory = newDirHistoryModel(dirStore)
+	a.helpViewport = viewport.New(0, 0)
+	a.helpViewport.SetContent(strings.Join(helpLines(), "\n"))
 	return a
 }
 
@@ -92,6 +96,10 @@ func (a App) resize() App {
 	a.request = a.request.SetSize(a.width, ch)
 	a.history = a.history.SetSize(a.width, ch)
 	a.dirHistory = a.dirHistory.SetSize(a.width, ch)
+	w := max(0, a.width-paneFocusedStyle.GetHorizontalFrameSize())
+	a.helpViewport.Width = w
+	a.helpViewport.Height = max(0, ch-paneFocusedStyle.GetVerticalFrameSize())
+	a.helpViewport.SetContent(wrapToWidth(strings.Join(helpLines(), "\n"), w))
 	return a
 }
 
@@ -121,12 +129,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.resize(), nil
 
 	case tea.KeyMsg:
+		if a.showHelp {
+			return a.updateHelp(msg)
+		}
 		if !a.activeScreenIsEditing() {
 			switch {
 			case key.Matches(msg, keys.Quit):
 				return a, tea.Quit
 			case key.Matches(msg, keys.Help):
-				a.showHelp = !a.showHelp
+				a.showHelp = true
+				a.helpViewport.GotoTop()
 				return a, nil
 			case key.Matches(msg, keys.ToggleLog):
 				a.screen = screenHistory
@@ -193,6 +205,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a.applyStoreWarning(), cmd
 }
 
+func (a App) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Help), msg.Type == tea.KeyEsc:
+		a.showHelp = false
+	case key.Matches(msg, keys.Quit):
+		return a, tea.Quit
+	case key.Matches(msg, keys.Up):
+		a.helpViewport.ScrollUp(1)
+	case key.Matches(msg, keys.Down):
+		a.helpViewport.ScrollDown(1)
+	}
+	return a, nil
+}
+
 func (a App) breadcrumb() string {
 	switch a.screen {
 	case screenRequest:
@@ -211,6 +237,9 @@ func (a App) breadcrumb() string {
 
 func (a App) footerHints() []hint {
 	tail := []hint{{"?", "help"}, {"q", "quit"}}
+	if a.showHelp {
+		return append([]hint{{"↑/↓", "scroll"}, {"esc", "close"}}, tail...)
+	}
 	switch a.screen {
 	case screenRequest:
 		if a.request.isEditing() {
@@ -232,8 +261,8 @@ func (a App) footerHints() []hint {
 	}
 }
 
-func (a App) helpView() string {
-	lines := []string{
+func helpLines() []string {
+	return []string{
 		"Global",
 		"  q, ctrl+c     quit",
 		"  h             jump to History",
@@ -262,7 +291,10 @@ func (a App) helpView() string {
 		"Directory History",
 		"  enter         switch to selected directory",
 	}
-	return paneFocusedStyle.Render(strings.Join(lines, "\n"))
+}
+
+func (a App) helpView() string {
+	return paneFocusedStyle.Width(max(0, a.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(a.helpViewport.View())
 }
 
 func (a App) View() string {

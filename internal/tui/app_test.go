@@ -375,3 +375,66 @@ func TestApp_FooterKeepsHelpAndQuitAt80Columns(t *testing.T) {
 		t.Errorf("footer = %q, want it to end with %q", plain, "? help  q quit")
 	}
 }
+
+func helpTestApp(t *testing.T, w, h int) App {
+	root := t.TempDir()
+	writeTestFile(t, root, "a.http", "### one\nGET https://a.example/1\n\n### two\nGET https://a.example/2\n")
+	writeTestFile(t, root, "b.http", "GET https://b.example/only\n")
+	return newLayoutApp(t, root, newTestHistoryStore(t), w, h)
+}
+
+func TestApp_HelpSwallowsKeysForHiddenScreen(t *testing.T) {
+	a := pressKeys(helpTestApp(t, 120, 35), "?", "j", "enter", "tab", "enter", "h", "d", "e")
+	if !a.showHelp || a.screen != screenBrowser {
+		t.Fatalf("showHelp = %v, screen = %v, want help still open over Browser", a.showHelp, a.screen)
+	}
+	if a.browser.files.Index() != 0 || a.browser.focus != paneFiles || a.browser.parsedFile != nil {
+		t.Errorf("hidden Browser changed: index=%d focus=%v parsed=%v", a.browser.files.Index(), a.browser.focus, a.browser.parsedFile != nil)
+	}
+}
+
+func TestApp_HelpEscClosesWithoutForwarding(t *testing.T) {
+	a := pressKeys(helpTestApp(t, 120, 35), "enter", "?", "esc")
+	if a.showHelp || a.browser.focus != paneRequests {
+		t.Errorf("showHelp = %v, focus = %v, want help closed and esc not forwarded", a.showHelp, a.browser.focus)
+	}
+}
+
+func TestApp_HelpQQuits(t *testing.T) {
+	_, cmd := pressKeys(helpTestApp(t, 80, 24), "?").Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("q inside help should quit")
+	}
+}
+
+func TestApp_HelpScrollsAt80x24(t *testing.T) {
+	a := pressKeys(helpTestApp(t, 80, 24), "?")
+	view := ansi.Strip(a.View())
+	assertViewFits(t, a.View(), 80, 24)
+	first := strings.SplitN(view, "\n", 2)[0]
+	if !strings.Contains(first, "rest-tui") || !strings.Contains(view, "Global") || !strings.Contains(view, "q, ctrl+c") {
+		t.Fatalf("top of help is cut off:\n%s", view)
+	}
+	for i := 0; i < 30; i++ {
+		a = pressKeys(a, "j")
+	}
+	if !strings.Contains(ansi.Strip(a.View()), "switch to selected directory") {
+		t.Errorf("j did not scroll to the end of help")
+	}
+	for i := 0; i < 30; i++ {
+		a = pressKeys(a, "k")
+	}
+	if !strings.Contains(ansi.Strip(a.View()), "Global") {
+		t.Errorf("k did not scroll back to the top")
+	}
+}
+
+func TestApp_HelpResizesWhileOpen(t *testing.T) {
+	a := pressKeys(helpTestApp(t, 120, 35), "?")
+	a = applyMsg(a, tea.WindowSizeMsg{Width: 60, Height: 20})
+	assertViewFits(t, a.View(), 60, 20)
+	a = pressKeys(a, "j")
+	if a.helpViewport.YOffset != 1 {
+		t.Errorf("helpViewport.YOffset = %d, want 1 after resize + j", a.helpViewport.YOffset)
+	}
+}

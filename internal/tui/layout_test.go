@@ -86,6 +86,9 @@ var layoutScenarios = []layoutScenario{
 	{"dir-history", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutHistoryApp(t, w, h), "d")
 	}},
+	{"help", func(t *testing.T, w, h int) App {
+		return pressKeys(newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), w, h), "?")
+	}},
 }
 
 func newLayoutHistoryApp(t *testing.T, w, h int) App {
@@ -158,7 +161,7 @@ func TestApp_ViewFitsTerminal(t *testing.T) {
 
 func TestApp_ViewDoesNotPanicOnTinyTerminal(t *testing.T) {
 	for _, sz := range []struct{ w, h int }{{0, 0}, {20, 5}} {
-		for _, keys := range [][]string{nil, {"h"}, {"d"}} {
+		for _, keys := range [][]string{nil, {"h"}, {"d"}, {"?"}} {
 			a := pressKeys(newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), sz.w, sz.h), keys...)
 			_ = a.View()
 			a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
