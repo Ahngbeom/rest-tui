@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -71,6 +72,47 @@ var (
 
 	blockedHighlightStyle = errorTextStyle.Bold(true).Reverse(true)
 )
+
+func statusCodeStyle(code int) lipgloss.Style {
+	color := colorError
+	switch {
+	case code >= 100 && code < 200:
+		color = colorFaintText
+	case code >= 200 && code < 300:
+		color = colorSuccess
+	case code >= 300 && code < 400:
+		color = colorAccent
+	case code >= 400 && code < 500:
+		color = colorWarning
+	}
+	return lipgloss.NewStyle().Foreground(color)
+}
+
+func methodStyle(method string) lipgloss.Style {
+	color := colorFaintText
+	switch strings.ToUpper(method) {
+	case "GET":
+		color = colorSuccess
+	case "POST":
+		color = colorWarning
+	case "PUT", "PATCH":
+		color = colorAccent
+	case "DELETE":
+		color = colorError
+	}
+	return lipgloss.NewStyle().Foreground(color)
+}
+
+func formatSize(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
 
 // wrapToWidth word-wraps s to width columns (ANSI-color-code aware) and
 // makes any URL in it clickable as a single OSC 8 hyperlink even where the

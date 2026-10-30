@@ -57,6 +57,12 @@ var layoutScenarios = []layoutScenario{
 		a := newLayoutRequestApp(t, w, h)
 		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, ResponseBody: `{"path":"` + strings.Repeat("segment/", 60) + `","text":"` + strings.Repeat("lorem ipsum ", 40) + `"}`}})
 	}},
+	{"request-summary-redirect", func(t *testing.T, w, h int) App {
+		a := newLayoutRequestApp(t, w, h)
+		long := "http://x/" + strings.Repeat("r", 191)
+		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, Status: "200 OK",
+			ResponseBody: strings.Repeat("line\n", 200), Redirects: []string{"301 → GET " + long, "302 → GET " + long}}})
+	}},
 	{"request-cjk-response", func(t *testing.T, w, h int) App {
 		a := newLayoutRequestApp(t, w, h)
 		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, ResponseBody: strings.Repeat("한글 응답 본문 ", 80)}})

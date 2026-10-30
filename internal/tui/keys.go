@@ -22,6 +22,8 @@ type keyMap struct {
 	Edit        key.Binding // "i": open the raw-text request editor
 	ApplyEdit   key.Binding // "ctrl+s": apply the edit buffer
 	CancelEdit  key.Binding // "esc": discard the edit buffer (edit mode only)
+	Top         key.Binding
+	Bottom      key.Binding
 }
 
 var keys = keyMap{
@@ -88,5 +90,13 @@ var keys = keyMap{
 	CancelEdit: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "cancel edit"),
+	),
+	Top: key.NewBinding(
+		key.WithKeys("g", "home"),
+		key.WithHelp("g", "top"),
+	),
+	Bottom: key.NewBinding(
+		key.WithKeys("G", "end"),
+		key.WithHelp("G", "bottom"),
 	),
 }

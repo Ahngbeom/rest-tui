@@ -1242,3 +1242,134 @@ func TestRequestModel_PreviewSanitizesRequestHead(t *testing.T) {
 		t.Error("resolved request must keep the bytes it sends")
 	}
 }
+
+func TestRequestModel_SummaryLineAfterResponse(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "POST", URL: "http://x/users"})
+	entry := history.Entry{StatusCode: 201, Status: "201 Created", Duration: 4*time.Millisecond + 300*time.Microsecond,
+		ResponseBody: strings.Repeat("x", 1229)}
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
+	if got, want := ansi.Strip(m.summaryLine()), "201 Created · 4ms · 1.2 KB"; got != want {
+		t.Errorf("summaryLine = %q, want %q", got, want)
+	}
+	if !strings.Contains(m.View(), ansi.Strip(m.summaryLine())) {
+		t.Error("View does not contain the summary line")
+	}
+}
+
+func TestRequestModel_SummaryLineBeforeSendAndOnError(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"})
+	if got := ansi.Strip(m.summaryLine()); got != "not sent" {
+		t.Errorf("summaryLine before send = %q, want %q", got, "not sent")
+	}
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{Error: "boom"}})
+	if got := ansi.Strip(m.summaryLine()); got != "ERR · boom" {
+		t.Errorf("summaryLine on error = %q, want %q", got, "ERR · boom")
+	}
+}
+
+func TestRequestModel_SummaryLineErrorTruncatedToWidth(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{Error: strings.Repeat("boom ", 100)}})
+	if w := ansi.StringWidth(m.summaryLine()); w > m.viewport.Width {
+		t.Errorf("summaryLine width = %d, want <= %d", w, m.viewport.Width)
+	}
+}
+
+func TestRequestModel_ShowsRedirectsInResponse(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/old"})
+	entry := history.Entry{StatusCode: 200, Status: "200 OK", Redirects: []string{"302 → GET http://x/new"}}
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
+	if !strings.Contains(ansi.Strip(m.viewport.View()), "redirected: 302 → GET http://x/new") {
+		t.Errorf("viewport missing redirect line:\n%s", ansi.Strip(m.viewport.View()))
+	}
+	if !strings.Contains(ansi.Strip(renderEntryDetail(entry)), "redirected: 302 → GET http://x/new") {
+		t.Error("renderEntryDetail missing redirect line")
+	}
+}
+
+func TestRequestModel_SendCmdRecordsRedirects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/new", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: srv.URL + "/old"})
+	msg := m.sendCmd()().(execResultMsg)
+	if len(msg.entry.Redirects) != 1 || !strings.Contains(msg.entry.Redirects[0], "/new") {
+		t.Errorf("entry.Redirects = %v, want one hop to /new", msg.entry.Redirects)
+	}
+}
+
+func TestRequestModel_TopBottomKeysAndScrollPercent(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"}).SetSize(80, 20)
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: strings.Repeat("line\n", 200)}})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	if !m.viewport.AtBottom() {
+		t.Error("G: viewport not at bottom")
+	}
+	if got := ansi.Strip(m.statusLine()); !strings.HasSuffix(got, "100%") {
+		t.Errorf("G: statusLine = %q, want suffix 100%%", got)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if m.viewport.YOffset != 0 {
+		t.Errorf("g: YOffset = %d, want 0", m.viewport.YOffset)
+	}
+	if got := ansi.Strip(m.statusLine()); !strings.HasSuffix(got, "0%") {
+		t.Errorf("g: statusLine = %q, want suffix 0%%", got)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	if !m.viewport.AtBottom() {
+		t.Error("end: viewport not at bottom")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	if m.viewport.YOffset != 0 {
+		t.Errorf("home: YOffset = %d, want 0", m.viewport.YOffset)
+	}
+}
+
+func TestRequestModel_ScrollPercentKeepsMessageAndFitsWidth(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"}).SetSize(60, 20)
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: strings.Repeat("line\n", 200)}})
+	m, _ = m.Update(clipboardCopyMsg{token: m.copyToken, err: errors.New(strings.Repeat("x", 200))})
+	got := ansi.Strip(m.statusLine())
+	if !strings.HasPrefix(got, "copy failed") || !strings.HasSuffix(got, "%") {
+		t.Errorf("statusLine = %q, want copy message then percent", got)
+	}
+	if w := ansi.StringWidth(got); w != m.viewport.Width {
+		t.Errorf("statusLine width = %d, want %d", w, m.viewport.Width)
+	}
+}
+
+func TestRequestModel_StatusLineOmitsPercentWhenContentFits(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"}).SetSize(120, 35)
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: "ok"}})
+	if got := ansi.Strip(m.statusLine()); strings.Contains(got, "%") {
+		t.Errorf("statusLine = %q, want no percent", got)
+	}
+}
+
+func TestRequestModel_MethodColoredInRequestLine(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "DELETE", URL: "http://x/users/1"})
+	if !strings.Contains(m.viewport.View(), methodStyle("DELETE").Render("DELETE")) {
+		t.Error("request line method is not rendered with methodStyle")
+	}
+	if strings.Contains(m.copyText(), "\x1b[") {
+		t.Error("copyText must stay uncolored")
+	}
+}
+
+func TestRequestModel_StatusLineOmitsPercentWhileEditing(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"}).SetSize(80, 20)
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: strings.Repeat("line\n", 200)}})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if got := ansi.Strip(m.statusLine()); strings.Contains(got, "%") {
+		t.Errorf("statusLine while editing = %q, want no percent", got)
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "200 OK") {
+		t.Error("summary line should stay visible while editing")
+	}
+}

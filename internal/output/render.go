@@ -22,11 +22,20 @@ type Options struct {
 	Color bool
 }
 
-// RenderResponse formats resp as "status (duration)", followed by headers
-// sorted by name, followed by the body (pretty-printed if it is valid JSON).
-// Sections with nothing to show are omitted.
+// RenderResponse formats resp as one "redirected: <hop>" line per followed
+// redirect (if any), then "status (duration)", followed by headers sorted by
+// name, followed by the body (pretty-printed if it is valid JSON). Sections
+// with nothing to show are omitted.
 func RenderResponse(resp *executor.Response, opts Options) string {
-	sections := []string{fmt.Sprintf("%s (%s)", Sanitize(resp.Status), resp.Duration.Round(time.Millisecond))}
+	var sections []string
+	if len(resp.Redirects) > 0 {
+		hops := make([]string, len(resp.Redirects))
+		for i, hop := range resp.Redirects {
+			hops[i] = "redirected: " + Sanitize(hop)
+		}
+		sections = append(sections, strings.Join(hops, "\n"))
+	}
+	sections = append(sections, fmt.Sprintf("%s (%s)", Sanitize(resp.Status), resp.Duration.Round(time.Millisecond)))
 
 	if headerLines := renderHeaders(resp.Headers); headerLines != "" {
 		sections = append(sections, headerLines)

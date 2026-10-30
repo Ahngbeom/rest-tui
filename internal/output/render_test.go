@@ -193,3 +193,20 @@ func TestRenderResponse_BinaryBodyPlaceholder(t *testing.T) {
 		t.Errorf("RenderResponse() = %q", got)
 	}
 }
+
+func TestRenderResponse_ShowsRedirectsFirst(t *testing.T) {
+	resp := &executor.Response{Status: "200 OK", Duration: 4 * time.Millisecond, Redirects: []string{"302 → GET http://x/new"}}
+	got := RenderResponse(resp, Options{})
+	if !strings.HasPrefix(got, "redirected: 302 → GET http://x/new\n\n200 OK (4ms)") {
+		t.Errorf("RenderResponse = %q", got)
+	}
+}
+
+func TestRenderResponse_MultipleRedirectsOnePerLine(t *testing.T) {
+	resp := &executor.Response{Status: "200 OK", Redirects: []string{"301 → GET http://x/a", "302 → GET http://x/b\x1b[2J"}}
+	got := RenderResponse(resp, Options{})
+	want := "redirected: 301 → GET http://x/a\nredirected: 302 → GET http://x/b"
+	if !strings.HasPrefix(got, want) || strings.Contains(got, "\x1b") {
+		t.Errorf("RenderResponse = %q, want prefix %q and no escapes", got, want)
+	}
+}

@@ -269,7 +269,7 @@ func (a App) footerHints() []hint {
 		if a.request.canSend() {
 			hints = append(hints, hint{"enter/ctrl+r", "send"})
 		}
-		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"c", "copy"}, hint{"i", "edit"}, hint{"esc", "back"}, hint{"h", "history"}, hint{"d", "dirs"})
+		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"g/G", "top/bottom"}, hint{"c", "copy"}, hint{"i", "edit"}, hint{"esc", "back"}, hint{"h", "history"}, hint{"d", "dirs"})
 		return append(hints, tail...)
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
@@ -304,6 +304,7 @@ func helpLines() []string {
 		"  e             cycle environment",
 		"  enter, ctrl+r send request",
 		"  ↑/↓           scroll response",
+		"  g/G, home/end top / bottom of response",
 		"  c, y          copy request/response",
 		"  i             edit request (method/URL/headers/body)",
 		"  ctrl+s, esc   apply / cancel edit (while editing)",

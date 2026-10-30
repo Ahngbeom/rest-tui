@@ -36,6 +36,7 @@ func responseFromEntry(e history.Entry) *executor.Response {
 		Headers:    e.ResponseHeaders,
 		Body:       []byte(e.ResponseBody),
 		Duration:   e.Duration,
+		Redirects:  e.Redirects,
 	}
 }
 
@@ -175,7 +176,7 @@ func (m *requestModel) scrollToResponse() {
 func (m requestModel) SetSize(width, height int) requestModel {
 	m.width, m.height = width, height
 	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
-	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize()-2) // env line + status line
+	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize()-3) // env, summary and status lines
 	m.viewport.Width = innerWidth
 	m.viewport.Height = innerHeight
 	m.editor.SetWidth(innerWidth)
@@ -313,6 +314,7 @@ func (m requestModel) sendCmd() tea.Cmd {
 			entry.ResponseHeaders = resp.Headers
 			entry.ResponseBody = string(resp.Body)
 			entry.Duration = resp.Duration
+			entry.Redirects = resp.Redirects
 		}
 
 		var historyWarn string
@@ -401,6 +403,12 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 				return m, nil
 			}
 			return m.startSend()
+		case key.Matches(msg, keys.Top):
+			m.viewport.GotoTop()
+			return m, nil
+		case key.Matches(msg, keys.Bottom):
+			m.viewport.GotoBottom()
+			return m, nil
 		case key.Matches(msg, keys.Copy):
 			m.copyToken++
 			return m, copyToClipboardCmd(m.copyText(), m.copyToken)
@@ -445,7 +453,8 @@ func (m requestModel) buildContent() (string, int) {
 		head.WriteString(warnTextStyle.Render(line))
 		head.WriteString("\n")
 	}
-	fmt.Fprintf(&head, "%s %s\n", output.Sanitize(m.resolved.Method), output.Sanitize(m.resolved.URL))
+	method := output.Sanitize(m.resolved.Method)
+	fmt.Fprintf(&head, "%s %s\n", methodStyle(method).Render(method), output.Sanitize(m.resolved.URL))
 	for _, h := range m.resolved.Headers {
 		fmt.Fprintf(&head, "%s: %s\n", output.Sanitize(h.Name), output.Sanitize(h.Value))
 	}
@@ -590,11 +599,36 @@ func (m requestModel) statusLine() string {
 	case !m.canSend():
 		text, style = m.blockedMessage(), errorTextStyle
 	}
-	if text == "" {
-		return ""
-	}
 	text = strings.ReplaceAll(text, "\n", " ")
-	return style.Render(ansi.Truncate(text, m.viewport.Width, "…"))
+	w := m.viewport.Width
+	if m.editing || m.viewport.TotalLineCount() <= m.viewport.Height {
+		if text == "" {
+			return ""
+		}
+		return style.Render(ansi.Truncate(text, w, "…"))
+	}
+	pct := fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
+	msg := ""
+	if text != "" {
+		msg = style.Render(ansi.Truncate(text, max(0, w-len(pct)-1), "…"))
+	}
+	pad := max(1, w-ansi.StringWidth(msg)-len(pct))
+	return msg + strings.Repeat(" ", pad) + mutedTextStyle.Render(pct)
+}
+
+func (m requestModel) summaryLine() string {
+	w := m.viewport.Width
+	switch {
+	case m.lastEntry == nil:
+		return mutedTextStyle.Render("not sent")
+	case m.lastEntry.Error != "":
+		text := "ERR · " + output.Sanitize(strings.ReplaceAll(m.lastEntry.Error, "\n", " "))
+		return errorTextStyle.Render(ansi.Truncate(text, w, "…"))
+	}
+	e := m.lastEntry
+	status := output.Sanitize(e.Status)
+	rest := fmt.Sprintf(" · %s · %s", e.Duration.Round(time.Millisecond), formatSize(len(e.ResponseBody)))
+	return ansi.Truncate(statusCodeStyle(e.StatusCode).Render(status)+rest, w, "…")
 }
 
 func (m requestModel) View() string {
@@ -602,7 +636,7 @@ func (m requestModel) View() string {
 	if m.editing {
 		body = m.editor.View()
 	}
-	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + body + "\n" + m.statusLine()
+	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + m.summaryLine() + "\n" + body + "\n" + m.statusLine()
 	return paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(content)
 }
 
