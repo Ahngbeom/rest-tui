@@ -172,6 +172,51 @@ func (m browserModel) refreshRecent() browserModel {
 	return m
 }
 
+// rescan rebuilds the browser from disk, keeping the cursor, the open file
+// and the focused pane where they were when those still exist. A filter is
+// not carried over.
+func (m browserModel) rescan() browserModel {
+	filesRel := ""
+	if it, ok := m.files.SelectedItem().(fileItem); ok {
+		filesRel = it.rel
+	}
+	openRel := ""
+	if m.parsedFile != nil {
+		if rel, err := filepath.Rel(m.root, m.selectedFile); err == nil {
+			openRel = rel
+		}
+	}
+	reqIdx, focus := m.requests.Index(), m.focus
+
+	n := newBrowserModel(m.root, m.store).SetSize(m.width, m.height)
+	indexOf := func(rel string) int {
+		for i, it := range n.files.Items() {
+			if f, ok := it.(fileItem); ok && f.rel == rel {
+				return i
+			}
+		}
+		return -1
+	}
+	if openRel != "" {
+		if i := indexOf(openRel); i >= 0 {
+			n.files.Select(i)
+			n = n.selectFile()
+			if len(n.requests.Items()) == 0 {
+				n.focus = paneFiles
+				return n
+			}
+			n.requests.Select(min(reqIdx, len(n.requests.Items())-1))
+			n.focus = focus
+			return n
+		}
+	}
+	if i := indexOf(filesRel); i >= 0 {
+		n.files.Select(i)
+	}
+	n.focus = paneFiles
+	return n
+}
+
 func (m browserModel) Init() tea.Cmd {
 	return nil
 }

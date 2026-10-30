@@ -130,7 +130,7 @@ func (a App) activeScreenIsEditing() bool {
 	case screenHistory:
 		return a.history.isFiltering()
 	case screenDirHistory:
-		return a.dirHistory.isFiltering()
+		return a.dirHistory.isFiltering() || a.dirHistory.isPrompting()
 	}
 	return false
 }
@@ -207,6 +207,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.screen = screenDirHistory
 				a.dirHistory = a.dirHistory.refresh()
 				return a.applyStoreWarning(), nil
+			case a.screen == screenBrowser && key.Matches(msg, keys.Rescan):
+				return a.replaceBrowser(a.browser.rescan()), nil
+			case a.screen == screenBrowser && key.Matches(msg, keys.OpenPath):
+				a.screen = screenDirHistory
+				a.dirHistory = a.dirHistory.refresh()
+				var cmd tea.Cmd
+				a.dirHistory, cmd = a.dirHistory.startPrompt()
+				return a.applyStoreWarning(), cmd
 			}
 		}
 
@@ -368,12 +376,15 @@ func (a App) footerHints() []hint {
 		}
 		return append([]hint{{"↑/↓", "move"}, {"enter", "detail"}, {"r", "rerun"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	case screenDirHistory:
-		return append([]hint{{"↑/↓", "move"}, {"enter", "switch"}, {"/", "filter"}, {"esc", "back"}}, tail...)
+		if a.dirHistory.isPrompting() {
+			return append([]hint{{"enter", "open"}, {"esc", "cancel"}}, tail...)
+		}
+		return append([]hint{{"o", "open path"}, {"↑/↓", "move"}, {"enter", "switch"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	default:
 		if a.browser.focus == paneRequests {
-			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"/", "filter"}, {"tab", "← files"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
+			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"/", "filter"}, {"tab", "← files"}, {"esc", "back"}, {"R", "rescan"}, {"o", "open path"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 		}
-		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "→ requests"}, {"h", "history"}, {"d", "dirs"}}, tail...)
+		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "→ requests"}, {"R", "rescan"}, {"o", "open path"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 	}
 }
 
@@ -391,6 +402,8 @@ func helpLines() []string {
 		"  tab           switch files/requests pane",
 		"  enter         open file / run request",
 		"  /             filter list (esc clears)",
+		"  R             rescan directory",
+		"  o             open a directory by path",
 		"",
 		"Request view",
 		"  e             cycle environment",
@@ -410,6 +423,7 @@ func helpLines() []string {
 		"",
 		"Directory History",
 		"  enter         switch to selected directory",
+		"  o             open a directory by path (~ ok)",
 		"  /             filter list (esc clears)",
 	}
 }

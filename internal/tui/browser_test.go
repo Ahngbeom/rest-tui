@@ -601,3 +601,49 @@ func TestBrowserModel_TabStaysOnFilesWhenRequestsEmpty(t *testing.T) {
 		t.Errorf("focus = %v, want paneFiles", m.focus)
 	}
 }
+
+func TestBrowserModel_RescanPicksUpNewFileAndKeepsSelection(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "GET https://example.com/a\n")
+	writeTestFile(t, dir, "b.http", "GET https://example.com/1\n\n###\nGET https://example.com/2\n")
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 30)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	writeTestFile(t, dir, "c.http", "GET https://example.com/c\n")
+	writeTestFile(t, dir, "b.http", "GET https://example.com/1\n\n###\nGET https://example.com/2\n\n###\nGET https://example.com/3\n")
+	m = m.rescan()
+
+	if n := len(m.files.Items()); n != 3 {
+		t.Fatalf("files = %d, want 3", n)
+	}
+	if rel := m.files.SelectedItem().(fileItem).rel; rel != "b.http" {
+		t.Errorf("selected file = %q, want b.http", rel)
+	}
+	if n := len(m.requests.Items()); n != 3 {
+		t.Errorf("requests = %d, want 3", n)
+	}
+	if m.requests.Index() != 1 || m.focus != paneRequests {
+		t.Errorf("index=%d focus=%v, want 1 / paneRequests", m.requests.Index(), m.focus)
+	}
+}
+
+func TestBrowserModel_RescanAfterSelectedFileDeleted(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "GET https://example.com/a\n")
+	b := writeTestFile(t, dir, "b.http", "GET https://example.com/b\n")
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 30)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.parsedFile == nil {
+		t.Fatal("precondition: file should be open")
+	}
+	if err := os.Remove(b); err != nil {
+		t.Fatal(err)
+	}
+	m = m.rescan()
+	if m.parsedFile != nil || m.focus != paneFiles || len(m.files.Items()) != 1 {
+		t.Errorf("parsedFile=%v focus=%v files=%d", m.parsedFile, m.focus, len(m.files.Items()))
+	}
+}

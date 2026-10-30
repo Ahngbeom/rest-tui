@@ -23,6 +23,8 @@ type keyMap struct {
 	ApplyEdit   key.Binding // "ctrl+s": apply the edit buffer
 	CancelEdit  key.Binding // "esc": discard the edit buffer (edit mode only)
 	Confirm     key.Binding // "y": accept a pending confirmation prompt
+	Rescan      key.Binding // "R": re-scan the Browser root
+	OpenPath    key.Binding // "o": open a directory by typing its path
 	Top         key.Binding
 	Bottom      key.Binding
 }
@@ -95,6 +97,14 @@ var keys = keyMap{
 	Confirm: key.NewBinding(
 		key.WithKeys("y"),
 		key.WithHelp("y", "confirm"),
+	),
+	Rescan: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "rescan"),
+	),
+	OpenPath: key.NewBinding(
+		key.WithKeys("o"),
+		key.WithHelp("o", "open path"),
 	),
 	Top: key.NewBinding(
 		key.WithKeys("g", "home"),

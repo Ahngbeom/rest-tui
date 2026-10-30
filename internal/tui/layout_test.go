@@ -130,6 +130,10 @@ var layoutScenarios = []layoutScenario{
 	{"dir-history", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutHistoryApp(t, w, h), "d")
 	}},
+	{"dirs-open-path-error", func(t *testing.T, w, h int) App {
+		a := newLayoutHistoryApp(t, w, h)
+		return pressKeys(a, "o", "/no/such/"+strings.Repeat("d", 200), "enter")
+	}},
 	{"help", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), w, h), "?")
 	}},

@@ -807,3 +807,56 @@ func TestApp_SwitchDirMsgDoesNotRecordMissingPath(t *testing.T) {
 		}
 	}
 }
+
+func TestApp_RKeyRescans(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "a.http", "GET https://example.com/a\n")
+	a := applyMsg(NewApp(root, newTestHistoryStore(t), newTestDirHistoryStore(t), Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
+	writeTestFile(t, root, "b.http", "GET https://example.com/b\n")
+	a = pressKeys(a, "R")
+	if n := len(a.browser.files.Items()); n != 2 {
+		t.Errorf("files = %d, want 2", n)
+	}
+}
+
+func TestApp_OKeyFromBrowserOpensPrompt(t *testing.T) {
+	a := pressKeys(newTestApp(t), "o")
+	if a.screen != screenDirHistory || !a.dirHistory.isPrompting() {
+		t.Errorf("screen=%v prompting=%v", a.screen, a.dirHistory.isPrompting())
+	}
+}
+
+func TestApp_PromptTypingSwallowsGlobalKeys(t *testing.T) {
+	a := newTestApp(t)
+	a = pressKeys(a, "o")
+	for _, k := range []string{"q", "h", "d"} {
+		model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		a = model.(App)
+		if cmd != nil {
+			if _, quit := cmd().(tea.QuitMsg); quit {
+				t.Fatalf("%q quit the app", k)
+			}
+		}
+	}
+	if a.screen != screenDirHistory || a.dirHistory.prompt.Value() != "qhd" {
+		t.Errorf("screen=%v value=%q", a.screen, a.dirHistory.prompt.Value())
+	}
+}
+
+func TestApp_OpenPathSwitchesAndRecords(t *testing.T) {
+	proj := t.TempDir()
+	a := pressKeys(newTestApp(t), "o", proj)
+	model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected switch cmd")
+	}
+	a = model.(App)
+	a = applyMsg(a, cmd())
+	if a.screen != screenBrowser || a.root != proj {
+		t.Errorf("screen=%v root=%q", a.screen, a.root)
+	}
+	entries, _ := a.dirStore.List(5)
+	if len(entries) == 0 || entries[0].Path != proj {
+		t.Errorf("dir history = %+v", entries)
+	}
+}
