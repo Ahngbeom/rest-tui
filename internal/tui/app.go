@@ -130,6 +130,9 @@ func (a App) resize() App {
 // actually reads the file, so this is checked here rather than once at
 // startup.
 func (a App) applyStoreWarning() App {
+	if a.quitArmed {
+		return a
+	}
 	prev := a.statusMsg
 	if w := a.store.Warning(); w != "" {
 		a.statusMsg = w
@@ -150,7 +153,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.resize(), nil
 
 	case tea.KeyMsg:
-		if msg.String() != "q" {
+		if msg.String() != "q" || a.activeScreenIsEditing() {
 			a = a.disarmQuit()
 		}
 		if a.showHelp {

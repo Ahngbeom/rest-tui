@@ -686,3 +686,38 @@ func TestApp_FooterShowsEscCancelWhileSending(t *testing.T) {
 		t.Errorf("footer = %q, want esc cancel instead of esc back", plain)
 	}
 }
+
+func TestApp_StoreWarningKeepsQuitConfirmation(t *testing.T) {
+	histPath := filepath.Join(t.TempDir(), "history.json")
+	if err := os.WriteFile(histPath, []byte("{ not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := pressKeys(newLayoutApp(t, t.TempDir(), history.NewStore(histPath), 80, 24), "h")
+	if a.statusMsg == "" {
+		t.Fatal("precondition: expected a store warning")
+	}
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+	a.request.executing = true
+	a = pressKeys(a, "q")
+	a = applyMsg(a, spinner.TickMsg{ID: a.request.spinner.ID()})
+	if !a.quitArmed || a.statusMsg != quitConfirmMsg {
+		t.Errorf("quitArmed = %v, statusMsg = %q, want quit confirmation kept", a.quitArmed, a.statusMsg)
+	}
+}
+
+func TestApp_EditorInputDisarmsQuit(t *testing.T) {
+	a := pressKeys(newSendingTestApp(t), "q", "i", "q", "esc")
+	if a.quitArmed {
+		t.Error("quit still armed after typing in the editor")
+	}
+	if _, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); cmd != nil {
+		t.Error("single q after editing should ask again, not quit")
+	}
+
+	a = pressKeys(newSendingTestApp(t), "i")
+	a.quitArmed = true
+	a = pressKeys(a, "q")
+	if a.quitArmed {
+		t.Error("q typed into the editor should disarm quit")
+	}
+}
