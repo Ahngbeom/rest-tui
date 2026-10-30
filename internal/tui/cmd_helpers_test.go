@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -69,4 +71,11 @@ func awaitMsg[T any](t *testing.T, cmd tea.Cmd) T {
 func newTestRequestModel(t *testing.T, req httpfile.Request) requestModel {
 	t.Helper()
 	return newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "").SetSize(120, 35)
+}
+
+func skipIfNoPermEnforcement(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permission bits are not enforced here")
+	}
 }

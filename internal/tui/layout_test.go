@@ -95,6 +95,9 @@ var layoutScenarios = []layoutScenario{
 		root := filepath.Join(t.TempDir(), strings.Repeat("missing-directory-", 10))
 		return newLayoutApp(t, root, newTestHistoryStore(t), w, h)
 	}},
+	{"browser-skipped-dirs", func(t *testing.T, w, h int) App {
+		return newLayoutApp(t, lockedSubdirRoot(t), newTestHistoryStore(t), w, h)
+	}},
 	{"history-list", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutHistoryApp(t, w, h), "h")
 	}},

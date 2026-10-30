@@ -776,3 +776,34 @@ func TestApp_FilterTypingSwallowsGlobalKeys(t *testing.T) {
 		t.Errorf("after esc: FilterState = %v, screen = %v", a.browser.files.FilterState(), a.screen)
 	}
 }
+
+func TestApp_ShowsScanNotice(t *testing.T) {
+	a := newLayoutApp(t, lockedSubdirRoot(t), newTestHistoryStore(t), 120, 35)
+	if !strings.Contains(ansi.Strip(a.View()), "skipped 1 unreadable dirs") {
+		t.Errorf("missing scan notice in:\n%s", ansi.Strip(a.View()))
+	}
+}
+
+func TestApp_DoesNotRecordMissingOrNonDirRoot(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope")
+	file := writeTestFile(t, t.TempDir(), "a.http", "GET https://example.com\n")
+	for _, root := range []string{missing, file} {
+		dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
+		NewApp(root, newTestHistoryStore(t), dirStore, Options{})
+		if got, _ := dirStore.List(0); len(got) != 0 {
+			t.Errorf("root %q recorded: %v", root, got)
+		}
+	}
+}
+
+func TestApp_SwitchDirMsgDoesNotRecordMissingPath(t *testing.T) {
+	a := newTestApp(t)
+	missing := filepath.Join(t.TempDir(), "nope")
+	applyMsg(a, switchDirMsg{path: missing})
+	got, _ := a.dirStore.List(0)
+	for _, e := range got {
+		if e.Path == missing {
+			t.Errorf("missing path recorded: %v", got)
+		}
+	}
+}

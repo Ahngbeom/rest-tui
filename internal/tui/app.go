@@ -5,6 +5,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -74,14 +75,33 @@ func NewApp(root string, store *history.Store, dirStore *dirhistory.Store, opts 
 	// Recording failures (e.g. an unwritable config dir) shouldn't stop the
 	// app from starting -- directory history is a convenience, not core
 	// functionality.
-	_, _ = dirStore.Touch(root)
-	a.browser = newBrowserModel(root, store)
+	if isDir(root) {
+		_, _ = dirStore.Touch(root)
+	}
 	a.request = newRequestModel("", "", &httpfile.File{}, httpfile.Request{}, store, "")
 	a.history = newHistoryModel(store)
 	a.dirHistory = newDirHistoryModel(dirStore)
 	a.helpViewport = viewport.New(0, 0)
 	a.helpViewport.SetContent(strings.Join(helpLines(), "\n"))
-	return a
+	return a.replaceBrowser(newBrowserModel(root, store))
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// replaceBrowser swaps in b, moving its scan notice into the status line in
+// place of the previous browser's.
+func (a App) replaceBrowser(b browserModel) App {
+	if a.browser.scanNotice != "" && a.statusMsg == a.browser.scanNotice {
+		a.statusMsg = ""
+	}
+	a.browser = b
+	if b.scanNotice != "" {
+		a.statusMsg = b.scanNotice
+	}
+	return a.resize()
 }
 
 // openRequestView makes m the active Request view, applying the app-wide
@@ -239,9 +259,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case switchDirMsg:
 		a.root = msg.path
-		_, _ = a.dirStore.Touch(msg.path)
-		a.browser = newBrowserModel(msg.path, a.store)
-		a.browser = a.browser.SetSize(a.width, a.contentHeight())
+		if isDir(msg.path) {
+			_, _ = a.dirStore.Touch(msg.path)
+		}
+		a = a.replaceBrowser(newBrowserModel(msg.path, a.store))
 		a.screen = screenBrowser
 		return a.applyStoreWarning(), nil
 	}

@@ -15,15 +15,23 @@ import (
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
 // discoverHTTPFiles recursively finds *.http files under root and returns
-// their paths relative to root, sorted.
-func discoverHTTPFiles(root string) ([]string, error) {
-	var found []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// their paths relative to root, sorted. Unreadable subdirectories are skipped
+// and counted; only a failure on root itself is an error.
+func discoverHTTPFiles(root string) (rels []string, skipped int, err error) {
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if path == root {
+				return err
+			}
+			skipped++
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -33,15 +41,15 @@ func discoverHTTPFiles(root string) ([]string, error) {
 			if relErr != nil {
 				rel = path
 			}
-			found = append(found, rel)
+			rels = append(rels, rel)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	sort.Strings(found)
-	return found, nil
+	sort.Strings(rels)
+	return rels, skipped, nil
 }
 
 type fileItem struct {
@@ -100,6 +108,10 @@ type browserModel struct {
 	// has even been selected.
 	rootErr error
 
+	// scanNotice reports a partially successful scan (unreadable
+	// subdirectories were skipped); the App shows it in the status line.
+	scanNotice string
+
 	width, height int
 }
 
@@ -119,7 +131,10 @@ func newBrowserModel(root string, store *history.Store) browserModel {
 
 	m := browserModel{root: root, store: store, files: files, requests: requests}
 
-	if rels, err := discoverHTTPFiles(root); err == nil {
+	if rels, skipped, err := discoverHTTPFiles(root); err == nil {
+		if skipped > 0 {
+			m.scanNotice = fmt.Sprintf("skipped %d unreadable dirs", skipped)
+		}
 		items := make([]list.Item, len(rels))
 		for i, rel := range rels {
 			items[i] = fileItem{rel: rel}
@@ -270,7 +285,7 @@ func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok && !listCapturesKey(m.focusedList(), keyMsg) {
 		switch {
 		case key.Matches(keyMsg, keys.Tab):
-			if m.focus == paneFiles && (m.parsedFile != nil || len(m.requests.Items()) > 0) {
+			if m.focus == paneFiles && len(m.requests.Items()) > 0 {
 				m.focus = paneRequests
 			} else {
 				m.focus = paneFiles
@@ -346,8 +361,14 @@ func (m browserModel) View() string {
 		left = errorTextStyle.Render(fitLines("cannot scan directory:\n"+m.rootErr.Error(), max(0, filesW-frameW), innerH))
 	}
 
+	if m.rootErr == nil && len(m.files.Items()) == 0 {
+		left = emptyPane(files, "No .http files under "+output.Sanitize(m.root)+" — d recent dirs · o open path", max(0, filesW-frameW), innerH)
+	}
+
 	right := requests.View()
 	switch {
+	case m.parsedFile == nil && m.parseErr == nil && len(m.requests.Items()) == 0:
+		right = emptyPane(requests, "Select a file and press enter", max(0, reqW-frameW), innerH)
 	case m.parseErr != nil:
 		right = errorTextStyle.Render(fitLines("parse error:\n"+m.parseErr.Error(), max(0, reqW-frameW), innerH))
 	default:
@@ -364,6 +385,13 @@ func (m browserModel) View() string {
 		filesPane.Width(max(0, filesW-borderW)).Height(max(0, m.height-borderH)).Render(left),
 		requestsPane.Width(max(0, reqW-borderW)).Height(max(0, m.height-borderH)).Render(right),
 	)
+}
+
+// emptyPane renders l's title with a muted guidance line in place of the list.
+func emptyPane(l list.Model, text string, width, height int) string {
+	title := l.Styles.TitleBar.Render(l.Styles.Title.Render(l.Title))
+	body := mutedTextStyle.Render(fitLines(text, width, max(0, height-lipgloss.Height(title))))
+	return title + "\n" + body
 }
 
 // joinParseErrors formats the blocks that failed to parse as a single

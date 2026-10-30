@@ -38,9 +38,9 @@ func TestDiscoverHTTPFiles_FindsHttpFilesRecursively(t *testing.T) {
 	writeTestFile(t, sub, "b.http", "GET https://example.com\n")
 	writeTestFile(t, dir, "notes.txt", "ignore me\n")
 
-	got, err := discoverHTTPFiles(dir)
-	if err != nil {
-		t.Fatalf("discoverHTTPFiles: %v", err)
+	got, skipped, err := discoverHTTPFiles(dir)
+	if err != nil || skipped != 0 {
+		t.Fatalf("discoverHTTPFiles: skipped=%d err=%v", skipped, err)
 	}
 	want := []string{"a.http", filepath.Join("sub", "b.http")}
 	if len(got) != len(want) {
@@ -514,5 +514,90 @@ func TestBrowserModel_SelectFileAfterRecentFilterShowsRequests(t *testing.T) {
 
 	if n := len(m.requests.VisibleItems()); n != 2 {
 		t.Errorf("VisibleItems = %d, want 2", n)
+	}
+}
+
+func lockedSubdirRoot(t *testing.T) string {
+	t.Helper()
+	skipIfNoPermEnforcement(t)
+	root := t.TempDir()
+	ok := filepath.Join(root, "ok")
+	if err := os.Mkdir(ok, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, ok, "a.http", "GET https://example.com\n")
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	return root
+}
+
+func TestDiscoverHTTPFiles_SkipsUnreadableSubdirs(t *testing.T) {
+	root := lockedSubdirRoot(t)
+	rels, skipped, err := discoverHTTPFiles(root)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if want := []string{filepath.Join("ok", "a.http")}; !reflect.DeepEqual(rels, want) {
+		t.Errorf("rels = %v, want %v", rels, want)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+}
+
+func TestDiscoverHTTPFiles_UnreadableOrMissingRootIsError(t *testing.T) {
+	if _, _, err := discoverHTTPFiles(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Error("missing root: expected error")
+	}
+	skipIfNoPermEnforcement(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+	if _, _, err := discoverHTTPFiles(root); err == nil {
+		t.Error("unreadable root: expected error")
+	}
+}
+
+func TestNewBrowserModel_ScanNoticeCountsSkippedDirs(t *testing.T) {
+	m := newBrowserModel(lockedSubdirRoot(t), newTestHistoryStore(t))
+	if m.scanNotice != "skipped 1 unreadable dirs" {
+		t.Errorf("scanNotice = %q", m.scanNotice)
+	}
+}
+
+func TestBrowserModel_EmptyRootShowsGuidance(t *testing.T) {
+	root := t.TempDir()
+	m := newBrowserModel(root, newTestHistoryStore(t)).SetSize(600, 20)
+	if want := "No .http files under " + root + " — d recent dirs · o open path"; !strings.Contains(ansi.Strip(m.View()), want) {
+		t.Errorf("missing guidance %q in:\n%s", want, ansi.Strip(m.View()))
+	}
+}
+
+func TestBrowserModel_RequestsPaneHintBeforeFileChosen(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "a.http", "GET https://example.com\n")
+	m := newBrowserModel(root, newTestHistoryStore(t)).SetSize(120, 20)
+	if !strings.Contains(ansi.Strip(m.View()), "Select a file and press enter") {
+		t.Errorf("missing requests hint in:\n%s", ansi.Strip(m.View()))
+	}
+}
+
+func TestBrowserModel_TabStaysOnFilesWhenRequestsEmpty(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "empty.http", "")
+	m := newBrowserModel(root, newTestHistoryStore(t)).SetSize(120, 20)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != paneFiles {
+		t.Errorf("focus = %v, want paneFiles", m.focus)
 	}
 }
