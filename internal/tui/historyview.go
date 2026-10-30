@@ -100,7 +100,7 @@ func renderEntryDetail(e history.Entry) string {
 	var b strings.Builder
 
 	if e.Env != "" {
-		b.WriteString(mutedTextStyle.Render("env: " + e.Env))
+		b.WriteString(mutedTextStyle.Render("env: " + output.Sanitize(e.Env)))
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "%s %s\n", output.Sanitize(e.Method), output.Sanitize(e.URL))
@@ -118,7 +118,7 @@ func renderEntryDetail(e history.Entry) string {
 	b.WriteString("\n\n")
 
 	if e.Error != "" {
-		b.WriteString(errorTextStyle.Render("Error: " + e.Error))
+		b.WriteString(errorTextStyle.Render("Error: " + output.Sanitize(e.Error)))
 	} else {
 		b.WriteString(output.RenderResponse(responseFromEntry(e), output.Options{Color: true}))
 	}
@@ -227,8 +227,8 @@ func (m historyModel) layout() historyModel {
 func (m historyModel) rerunPrompt() string {
 	e := m.pendingRerun
 	w := max(0, m.width-paneFocusedStyle.GetHorizontalFrameSize())
-	method := output.Sanitize(e.Method)
-	url := output.Sanitize(e.URL)
+	method := oneLine(e.Method)
+	url := oneLine(e.URL)
 	if room := w - lipgloss.Width("rerun "+method+" ") - len("? (y/n)"); lipgloss.Width(url) > room {
 		url = ansi.Truncate(url, max(0, room), "…")
 	}
@@ -268,11 +268,6 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
-		if m.mode == historyModeList && listCapturesKey(m.list, msg) {
-			var cmd tea.Cmd
-			m.list, cmd = m.list.Update(msg)
-			return m, cmd
-		}
 		if m.pendingRerun != nil {
 			entry := *m.pendingRerun
 			m.pendingRerun = nil
@@ -281,6 +276,11 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 				return m, func() tea.Msg { return rerunMsg{entry: entry} }
 			}
 			return m, nil
+		}
+		if m.mode == historyModeList && listCapturesKey(m.list, msg) {
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
 		}
 		switch {
 		case key.Matches(msg, keys.Back):

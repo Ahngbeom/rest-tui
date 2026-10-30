@@ -117,6 +117,17 @@ var layoutScenarios = []layoutScenario{
 		}
 		return a
 	}},
+	{"history-rerun-confirm-newline-url", func(t *testing.T, w, h int) App {
+		store := newTestHistoryStore(t)
+		if _, err := store.Append(history.Entry{Method: "POST", URL: "https://example.com/a\nb\nc\td", StatusCode: 200}); err != nil {
+			t.Fatal(err)
+		}
+		a := pressKeys(newLayoutApp(t, t.TempDir(), store, w, h), "h", "r")
+		if a.history.pendingRerun == nil {
+			t.Fatal("precondition: expected a pending rerun confirmation")
+		}
+		return a
+	}},
 	{"history-rows-long-url", func(t *testing.T, w, h int) App {
 		store := newTestHistoryStore(t)
 		long := "https://example.com/" + strings.Repeat("u", 280)

@@ -514,10 +514,10 @@ func (m requestModel) buildContent() (string, int) {
 	case m.lastEntry == nil:
 		tail.WriteString(mutedTextStyle.Render("(not yet sent — press enter to send)"))
 	case m.lastEntry.Error != "":
-		tail.WriteString(errorTextStyle.Render("Error: " + m.lastEntry.Error))
+		tail.WriteString(errorTextStyle.Render("Error: " + output.Sanitize(m.lastEntry.Error)))
 	default:
 		if cur := m.currentEnv(); cur != "" && m.lastEntry.Env != cur {
-			tail.WriteString(mutedTextStyle.Render("(sent with env: " + m.lastEntry.Env + ")"))
+			tail.WriteString(mutedTextStyle.Render("(sent with env: " + output.Sanitize(m.lastEntry.Env) + ")"))
 			tail.WriteString("\n")
 		}
 		tail.WriteString(output.RenderResponse(responseFromEntry(*m.lastEntry), output.Options{Color: true}))
@@ -611,7 +611,11 @@ func (m requestModel) title() string {
 func (m requestModel) canSend() bool { return len(m.missingVars) == 0 }
 
 func (m requestModel) blockedMessage() string {
-	return "cannot send: " + describeUnresolved(m.missingVars) + " — e switch env · i edit"
+	hint := "i edit"
+	if m.canCycleEnv() {
+		hint = "e switch env · " + hint
+	}
+	return "cannot send: " + describeUnresolved(m.missingVars) + " — " + hint
 }
 
 func (m requestModel) statusLine() string {

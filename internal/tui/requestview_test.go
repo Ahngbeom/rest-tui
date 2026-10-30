@@ -780,7 +780,7 @@ func TestRequestModel_ProdEnvUsesWarningStyle(t *testing.T) {
 func TestRequestModel_UnresolvedVarsBlockSendWithGuidance(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "{{host}}/x", Headers: []httpfile.Header{{Name: "Authorization", Value: "Bearer {{token}}"}}}
 	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "").SetSize(200, 30)
-	want := "cannot send: unresolved {{host}}, {{token}} — e switch env · i edit"
+	want := "cannot send: unresolved {{host}}, {{token}} — i edit"
 
 	if m.canSend() {
 		t.Fatal("canSend() = true with unresolved vars")
@@ -838,7 +838,7 @@ func TestRequestModel_ApplyEditKeepsLeftoverPlaceholdersBlocked(t *testing.T) {
 	if m.canSend() {
 		t.Fatal("canSend() = true; the edit still contains {{token}}")
 	}
-	if got := plainText(m.statusLine()); !strings.Contains(got, "cannot send: unresolved {{token}} — e switch env · i edit") {
+	if got := plainText(m.statusLine()); !strings.Contains(got, "cannot send: unresolved {{token}} — i edit") {
 		t.Errorf("statusLine = %q", got)
 	}
 
@@ -1054,7 +1054,7 @@ func TestRequestModel_MissingBodyFileBlocksSend(t *testing.T) {
 		t.Error("Enter must not send when the body file is missing")
 	}
 	status := ansiEscapePattern.ReplaceAllString(m.statusLine(), "")
-	if !strings.Contains(status, "cannot send: missing file: ./body.json — e switch env · i edit") {
+	if !strings.Contains(status, "cannot send: missing file: ./body.json — i edit") {
 		t.Errorf("statusLine() = %q", status)
 	}
 }
@@ -1446,5 +1446,40 @@ func TestRequestModel_EscWhileSendingCancelsAndRecordsCanceled(t *testing.T) {
 	}
 	if got := ansi.Strip(m.summaryLine()); got != "ERR · canceled" {
 		t.Errorf("summaryLine = %q, want %q", got, "ERR · canceled")
+	}
+}
+
+func TestRequestModel_BlockedMessageOmitsEnvHintWhenEnvCannotCycle(t *testing.T) {
+	m := newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: "{{host}}/x"}, newTestHistoryStore(t)).SetSize(200, 30)
+	if m.canCycleEnv() || m.canSend() {
+		t.Fatalf("precondition: canCycleEnv = %v, canSend = %v", m.canCycleEnv(), m.canSend())
+	}
+	if got, want := m.blockedMessage(), "cannot send: unresolved {{host}} — i edit"; got != want {
+		t.Errorf("blockedMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_BlockedMessageKeepsEnvHintWhenEnvCanCycle(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"a": {}, "b": {}}`)
+	m := openAt(t, root, "x.http", "")
+	if !m.canCycleEnv() {
+		t.Fatal("precondition: expected two envs to cycle through")
+	}
+	if got, want := m.blockedMessage(), "cannot send: unresolved {{host}} — e switch env · i edit"; got != want {
+		t.Errorf("blockedMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_ResultLinesSanitizeErrorAndSentEnv(t *testing.T) {
+	const osc = "\x1b]0;X\x07"
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+	m := openAt(t, root, "x.http", "")
+	for _, e := range []history.Entry{{Error: "boom" + osc}, {StatusCode: 200, Env: "other" + osc}} {
+		m.lastEntry = &e
+		if content, _ := m.buildContent(); strings.Contains(content, "\x1b]0;") || strings.Contains(content, "\x07") {
+			t.Errorf("content for %+v contains OSC sequence: %q", e, content)
+		}
 	}
 }

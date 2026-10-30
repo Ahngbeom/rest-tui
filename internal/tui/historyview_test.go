@@ -557,3 +557,31 @@ func TestHistoryModel_RefreshWithFilterAppliedShowsAllAndKeepsCursor(t *testing.
 		t.Errorf("SelectedItem = %+v, want the /orders entry", m.list.SelectedItem())
 	}
 }
+
+func TestHistoryModel_EscDismissesRerunPromptWithFilterApplied(t *testing.T) {
+	m := newPostHistoryModel(t)
+	for _, k := range []tea.KeyMsg{typeRunes("/"), typeRunes("users"), {Type: tea.KeyEnter}, typeRunes("r")} {
+		m, _ = m.Update(k)
+	}
+	if m.list.FilterState() != list.FilterApplied || m.pendingRerun == nil {
+		t.Fatalf("precondition: filter = %v, pendingRerun = %v", m.list.FilterState(), m.pendingRerun)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.pendingRerun != nil || strings.Contains(ansi.Strip(m.View()), "(y/n)") {
+		t.Fatalf("esc left the rerun prompt pending: pendingRerun = %v", m.pendingRerun)
+	}
+	if _, cmd := m.Update(typeRunes("y")); cmd != nil {
+		if _, ok := cmd().(rerunMsg); ok {
+			t.Error("y after esc reran the unsafe request")
+		}
+	}
+}
+
+func TestHistoryView_DetailSanitizesEnvAndError(t *testing.T) {
+	const osc = "\x1b]0;X\x07"
+	e := history.Entry{Method: "GET", URL: "https://example.com", Env: "prod" + osc, Error: "boom" + osc}
+	if got := renderEntryDetail(e); strings.Contains(got, "\x1b]") || strings.Contains(got, "\x07") {
+		t.Errorf("detail contains OSC sequence: %q", got)
+	}
+}
