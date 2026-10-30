@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -31,25 +32,64 @@ type entryItem struct {
 
 func (e entryItem) FilterValue() string { return e.entry.URL }
 
-func (e entryItem) Title() string {
-	status := fmt.Sprintf("%d", e.entry.StatusCode)
-	if e.entry.Error != "" {
-		status = "ERR"
+func relativeTime(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d/time.Minute))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d/time.Hour))
 	}
-	stamp := e.entry.Timestamp.Format("15:04:05")
-	sep := "  "
-	if e.entry.Env != "" {
-		stamp += "  [" + e.entry.Env + "]"
-		sep = " "
-	}
-	return fmt.Sprintf("%s%s%s %s -> %s", stamp, sep, e.entry.Method, e.entry.URL, status)
+	return fmt.Sprintf("%dd ago", int(d/(24*time.Hour)))
 }
 
-func (e entryItem) Description() string {
-	if e.entry.Error != "" {
-		return e.entry.Error
+var rowWhitespace = strings.NewReplacer("\n", " ", "\t", " ")
+
+func oneLine(s string) string {
+	return rowWhitespace.Replace(output.Sanitize(s))
+}
+
+func formatEntryRow(e history.Entry, now time.Time, width int) string {
+	status := fmt.Sprintf("%3d", e.StatusCode)
+	if e.Error != "" {
+		status = "ERR"
 	}
-	return e.entry.Duration.Round(time.Millisecond).String()
+	method := oneLine(e.Method)
+	head := statusCodeStyle(e.StatusCode).Render(status) + " " + methodStyle(method).Render(fmt.Sprintf("%-7s", method)) + " "
+	if e.Env != "" {
+		head += oneLine(e.Env) + " "
+	}
+	name := e.Name
+	if name == "" {
+		name = e.URL
+	}
+	rel := relativeTime(e.Timestamp, now)
+	row := head
+	if room := width - lipgloss.Width(head) - 2 - lipgloss.Width(rel); room >= 1 {
+		row += ansi.Truncate(oneLine(name), room, "…")
+	}
+	row += "  " + rel
+	return ansi.Truncate(row, width, "")
+}
+
+type entryRowDelegate struct{}
+
+func (entryRowDelegate) Height() int                         { return 1 }
+func (entryRowDelegate) Spacing() int                        { return 0 }
+func (entryRowDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+
+func (entryRowDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	it, ok := item.(entryItem)
+	if !ok {
+		return
+	}
+	prefix := "  "
+	if index == m.Index() {
+		prefix = "> "
+	}
+	fmt.Fprint(w, prefix+formatEntryRow(it.entry, time.Now(), m.Width()-2))
 }
 
 // renderEntryDetail formats a full request/response record the same way a
@@ -122,7 +162,7 @@ type historyModel struct {
 }
 
 func newHistoryModel(store *history.Store) historyModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := list.New(nil, entryRowDelegate{}, 0, 0)
 	l.Title = "History"
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false)

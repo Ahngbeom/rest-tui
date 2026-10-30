@@ -114,6 +114,16 @@ var layoutScenarios = []layoutScenario{
 		}
 		return a
 	}},
+	{"history-rows-long-url", func(t *testing.T, w, h int) App {
+		store := newTestHistoryStore(t)
+		long := "https://example.com/" + strings.Repeat("u", 280)
+		for _, e := range []history.Entry{{Method: "GET", URL: long, StatusCode: 200}, {Method: "POST", URL: long, StatusCode: 500}, {Method: "GET", URL: long, Error: "canceled"}} {
+			if _, err := store.Append(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return pressKeys(newLayoutApp(t, t.TempDir(), store, w, h), "h")
+	}},
 	{"dir-history", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutHistoryApp(t, w, h), "d")
 	}},

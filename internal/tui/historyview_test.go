@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -309,20 +312,84 @@ func TestHistoryModel_DetailCopyStatusKeepsHeight(t *testing.T) {
 }
 
 func TestHistoryView_ShowsEnvInListAndDetail(t *testing.T) {
-	e := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, Env: "dev"}
-	if got := (entryItem{entry: e}).Title(); !strings.Contains(got, "[dev]") {
-		t.Errorf("Title = %q, want [dev]", got)
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	e := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, Env: "dev", Timestamp: now}
+	if got := ansi.Strip(formatEntryRow(e, now, 80)); !strings.Contains(got, "GET     dev https://example.com") {
+		t.Errorf("row = %q, want env between method and URL", got)
 	}
 	if got := plainText(renderEntryDetail(e)); !strings.Contains(got, "env: dev") {
 		t.Errorf("detail = %q, want env: dev", got)
 	}
-	if got := (entryItem{entry: e}).Title(); !strings.Contains(got, "  [dev] GET ") {
-		t.Errorf("Title = %q, want two spaces before [dev] and one after", got)
-	}
 	e.Env = ""
-	got := (entryItem{entry: e}).Title()
-	if strings.Contains(got, "[") || !strings.Contains(got, "  GET ") {
-		t.Errorf("Title = %q, want no env marker and two spaces before method", got)
+	if got := ansi.Strip(formatEntryRow(e, now, 80)); !strings.Contains(got, "GET     https://example.com") || strings.Contains(got, "dev") {
+		t.Errorf("row = %q, want no env", got)
+	}
+}
+
+var rowNow = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
+func TestRelativeTime(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{{30 * time.Second, "just now"}, {3 * time.Minute, "3m ago"}, {5 * time.Hour, "5h ago"}, {49 * time.Hour, "2d ago"}} {
+		if got := relativeTime(rowNow.Add(-c.d), rowNow); got != c.want {
+			t.Errorf("relativeTime(-%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+func TestFormatEntryRow_Layout(t *testing.T) {
+	e := history.Entry{StatusCode: 201, Method: "POST", Env: "dev", Name: "Create user", Timestamp: rowNow.Add(-3 * time.Minute)}
+	if got, want := ansi.Strip(formatEntryRow(e, rowNow, 80)), "201 POST    dev Create user  3m ago"; got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+}
+
+func TestFormatEntryRow_ErrorFallsBackToURL(t *testing.T) {
+	e := history.Entry{Error: "canceled", Method: "GET", URL: "https://example.com/x", Timestamp: rowNow}
+	if got, want := ansi.Strip(formatEntryRow(e, rowNow, 80)), "ERR GET     https://example.com/x  just now"; got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+}
+
+func TestFormatEntryRow_TruncatesNameNotStatus(t *testing.T) {
+	e := history.Entry{StatusCode: 200, Method: "GET", URL: "https://example.com/" + strings.Repeat("a", 100), Timestamp: rowNow}
+	row := ansi.Strip(formatEntryRow(e, rowNow, 30))
+	if lipgloss.Width(row) > 30 || !strings.HasPrefix(row, "200 GET     ") || !strings.HasSuffix(row, "just now") || !strings.Contains(row, "…") {
+		t.Errorf("row = %q", row)
+	}
+}
+
+func TestFormatEntryRow_StaysOneLine(t *testing.T) {
+	e := history.Entry{StatusCode: 200, Method: "GET", Name: "a\nb\tc\x1b[31m", Env: "d\ne", Timestamp: rowNow}
+	row := formatEntryRow(e, rowNow, 80)
+	if strings.ContainsAny(row, "\n\t") || strings.Contains(ansi.Strip(row), "\x1b") {
+		t.Errorf("row = %q, want a single clean line", row)
+	}
+	if got := ansi.Strip(row); !strings.Contains(got, "d e a b c") {
+		t.Errorf("row = %q, want collapsed spaces", got)
+	}
+}
+
+func TestEntryRowDelegate_RendersOneLineWithCursor(t *testing.T) {
+	d := entryRowDelegate{}
+	if d.Height() != 1 || d.Spacing() != 0 {
+		t.Fatalf("Height/Spacing = %d/%d", d.Height(), d.Spacing())
+	}
+	items := []list.Item{
+		entryItem{entry: history.Entry{StatusCode: 200, Method: "GET", URL: "https://example.com/a", Timestamp: time.Now()}},
+		entryItem{entry: history.Entry{StatusCode: 404, Method: "GET", URL: "https://example.com/b", Timestamp: time.Now()}},
+	}
+	l := list.New(items, d, 60, 10)
+	var b0, b1 bytes.Buffer
+	d.Render(&b0, l, 0, items[0])
+	d.Render(&b1, l, 1, items[1])
+	if got := ansi.Strip(b0.String()); !strings.HasPrefix(got, "> 200") || strings.Contains(got, "\n") {
+		t.Errorf("selected = %q", got)
+	}
+	if got := ansi.Strip(b1.String()); !strings.HasPrefix(got, "  404") {
+		t.Errorf("other = %q", got)
 	}
 }
 

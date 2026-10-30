@@ -131,6 +131,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 		URL:     entry.URL,
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
+		Name:    entry.Name,
 	}
 	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
@@ -305,6 +306,7 @@ func (m *requestModel) sendCmd() tea.Cmd {
 	timeout := m.sendTimeout()
 	store := m.store
 	id := m.id
+	name := m.req.Name
 	envName := m.currentEnv()
 	if envName == "" {
 		envName = m.entryEnv
@@ -321,6 +323,7 @@ func (m *requestModel) sendCmd() tea.Cmd {
 			RequestHeaders: resolved.Headers,
 			RequestBody:    resolved.Body,
 			Env:            envName,
+			Name:           name,
 		}
 		if err != nil {
 			entry.Error = describeSendError(err, timeout)

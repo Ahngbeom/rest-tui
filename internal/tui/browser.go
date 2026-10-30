@@ -145,6 +145,7 @@ func (m browserModel) refreshRecent() browserModel {
 		items[i] = entryItem{entry: e}
 	}
 	m.requests.Title = "Recent"
+	m.requests.SetDelegate(entryRowDelegate{})
 	m.requests.SetItems(items)
 	m.requests.Select(0)
 	return m
@@ -195,6 +196,7 @@ func (m browserModel) selectFile() browserModel {
 	if !ok {
 		return m
 	}
+	m.requests.SetDelegate(list.NewDefaultDelegate())
 	m.requests.Title = "Requests" // selecting a file always replaces any Recent list
 
 	full := filepath.Join(m.root, item.rel)

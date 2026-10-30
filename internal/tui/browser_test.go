@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -417,5 +418,16 @@ func TestBrowserModel_ParseWarningWrapsToAtMostThreeLines(t *testing.T) {
 	assertViewFits(t, view, 80, 24)
 	if !strings.Contains(ansi.Strip(view), "good") {
 		t.Error("the valid request disappeared from the Requests pane")
+	}
+}
+
+func TestBrowserModel_RecentUsesEntryRows(t *testing.T) {
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a", StatusCode: 200, Timestamp: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	m := newBrowserModel(t.TempDir(), store).SetSize(120, 20)
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "200 GET") {
+		t.Errorf("view missing entry row:\n%s", got)
 	}
 }
