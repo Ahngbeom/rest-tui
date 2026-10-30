@@ -3,6 +3,7 @@ package env
 import (
 	"math/rand/v2"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -114,5 +115,73 @@ func TestResolveRequest_PreservesUnsupported(t *testing.T) {
 	got, _ := ResolveRequest(req, nil, testResolveOptions(""))
 	if !reflect.DeepEqual(got.Unsupported, req.Unsupported) {
 		t.Errorf("Unsupported = %v", got.Unsupported)
+	}
+}
+
+func TestResolveRequest_IncludesBodyFileRelativeToBaseDir(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "body.json", "{\"a\": 1}\n")
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
+	got, missing := ResolveRequest(req, nil, testResolveOptions(dir))
+	if got.Body != `{"a": 1}` || len(missing) != 0 {
+		t.Errorf("Body = %q, missing = %v", got.Body, missing)
+	}
+}
+
+func TestResolveRequest_IncludesFileInsideMultipartPart(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "hello\n")
+	body := "--b\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\n\n< ./a.txt\n--b--"
+	got, _ := ResolveRequest(httpfile.Request{Method: "POST", URL: "https://example.com", Body: body}, nil, testResolveOptions(dir))
+	want := "--b\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\n\nhello\n--b--"
+	if got.Body != want {
+		t.Errorf("Body = %q, want %q", got.Body, want)
+	}
+}
+
+func TestResolveRequest_IncludePathIsSubstitutedButContentIsNot(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "tpl.json", `{"name": "{{name}}"}`)
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./{{file}}"}
+	got, missing := ResolveRequest(req, map[string]string{"file": "tpl.json", "name": "Bob"}, testResolveOptions(dir))
+	if got.Body != `{"name": "{{name}}"}` || len(missing) != 0 {
+		t.Errorf("Body = %q, missing = %v", got.Body, missing)
+	}
+}
+
+func TestResolveRequest_AbsoluteIncludePath(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "abs.txt", "abs")
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< " + filepath.Join(dir, "abs.txt")}
+	got, _ := ResolveRequest(req, nil, testResolveOptions(t.TempDir()))
+	if got.Body != "abs" {
+		t.Errorf("Body = %q", got.Body)
+	}
+}
+
+func TestResolveRequest_MissingFileIsReportedAfterVariables(t *testing.T) {
+	req := httpfile.Request{Method: "POST", URL: "{{host}}/x", Body: "< ./nope.json\n< ./nope.json"}
+	got, missing := ResolveRequest(req, nil, testResolveOptions(t.TempDir()))
+	if want := []string{"host", "missing file: ./nope.json"}; !reflect.DeepEqual(missing, want) {
+		t.Errorf("missing = %v, want %v", missing, want)
+	}
+	if got.Body != "< ./nope.json\n< ./nope.json" {
+		t.Errorf("Body = %q, unreadable include lines must stay as written", got.Body)
+	}
+}
+
+func TestResolveRequest_XMLBodyLinesAreNotIncludes(t *testing.T) {
+	body := "<?xml version=\"1.0\"?>\n<root>\n  <child/>\n</root>"
+	got, missing := ResolveRequest(httpfile.Request{Method: "POST", URL: "https://example.com", Body: body}, nil, testResolveOptions(t.TempDir()))
+	if got.Body != body || len(missing) != 0 {
+		t.Errorf("Body = %q, missing = %v", got.Body, missing)
+	}
+}
+
+func TestResolveRequest_EmptyBaseDirSkipsIncludes(t *testing.T) {
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
+	got, missing := ResolveRequest(req, nil, testResolveOptions(""))
+	if got.Body != "< ./body.json" || len(missing) != 0 {
+		t.Errorf("Body = %q, missing = %v; an empty BaseDir must not read files", got.Body, missing)
 	}
 }
