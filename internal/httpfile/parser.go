@@ -18,6 +18,18 @@ var knownMethods = map[string]bool{
 // still parses normally. The first recorded error (if any) is also
 // returned as err for callers that only care whether something went wrong.
 func Parse(data []byte) (*File, error) {
+	return parse(data, false)
+}
+
+// ParseVerbatimBody parses like Parse but keeps every body line as written:
+// response handlers, "<>" history links and "< path" lines stay in Body and
+// nothing is added to Unsupported. It is meant for re-parsing text whose
+// body was already resolved, such as the Request view's edit buffer.
+func ParseVerbatimBody(data []byte) (*File, error) {
+	return parse(data, true)
+}
+
+func parse(data []byte, verbatimBody bool) (*File, error) {
 	lines := strings.Split(string(data), "\n")
 
 	f := &File{Vars: map[string]string{}}
@@ -49,7 +61,7 @@ func Parse(data []byte) (*File, error) {
 			bodyOffset++
 		}
 
-		if err := parseBlock(f, block, bodyOffset, delimiterName); err != nil {
+		if err := parseBlock(f, block, bodyOffset, delimiterName, verbatimBody); err != nil {
 			f.ParseErrors = append(f.ParseErrors, err)
 		}
 	}
@@ -66,7 +78,7 @@ func Parse(data []byte) (*File, error) {
 // lineOffset is the 0-based source line number of block[0]. On failure it
 // returns the error without touching f.Requests for this block; the caller
 // is expected to record it and move on to the next block.
-func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *ParseError {
+func parseBlock(f *File, block []string, lineOffset int, delimiterName string, verbatimBody bool) *ParseError {
 	name := delimiterName
 	var req *Request
 	var pre []string
@@ -93,9 +105,13 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 		}
 		if strings.HasPrefix(trimmed, "< {%") {
 			pre = addUnique(pre, "pre-request script")
+			scriptLine := i
 			for !strings.Contains(trimmed, "%}") && i+1 < len(block) {
 				i++
 				trimmed = strings.TrimSpace(block[i])
+			}
+			if !strings.Contains(trimmed, "%}") {
+				return &ParseError{Line: lineOffset + scriptLine + 1, Msg: "unclosed pre-request script (missing %})"}
 			}
 			continue
 		}
@@ -142,7 +158,7 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 			i++
 			break
 		}
-		if _, ok := stripCommentPrefix(trimmed); ok {
+		if _, ok := stripCommentPrefix(trimmed); ok || strings.HasPrefix(block[i], "<>") {
 			continue
 		}
 		name, value, ok := parseHeaderLine(trimmed)
@@ -153,7 +169,9 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 	}
 
 	// Body: remainder of the block, trimmed of surrounding blank lines.
-	if i < len(block) {
+	if i < len(block) && verbatimBody {
+		req.Body = strings.TrimRight(strings.Join(block[i:], "\n"), "\n \t")
+	} else if i < len(block) {
 		body, unsupported := splitResponseHandlers(block[i:])
 		req.Body = strings.TrimRight(strings.Join(body, "\n"), "\n \t")
 		for _, u := range unsupported {

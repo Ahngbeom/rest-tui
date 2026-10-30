@@ -2,6 +2,7 @@ package httpfile
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -406,5 +407,55 @@ func TestParse_IndentedHistoryLinkInBodyIsKept(t *testing.T) {
 	f, _ := Parse([]byte("POST https://example.com\n\nx\n  <> y.json\n"))
 	if got := f.Requests[0].Body; got != "x\n  <> y.json" {
 		t.Errorf("Body = %q", got)
+	}
+}
+
+func TestParse_HistoryLinkInHeaderSectionIsSkipped(t *testing.T) {
+	cases := map[string]struct {
+		src     string
+		headers int
+	}{
+		"under request line": {"GET https://e\n<> 2024.json\n", 0},
+		"under header":       {"GET https://e\nAccept: a\n<> x.json\n", 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f, err := Parse([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(f.Requests) != 1 {
+				t.Fatalf("Requests = %d, want 1", len(f.Requests))
+			}
+			req := f.Requests[0]
+			if len(req.Headers) != tc.headers || req.Body != "" {
+				t.Errorf("Headers = %+v, Body = %q", req.Headers, req.Body)
+			}
+		})
+	}
+}
+
+func TestParse_UnclosedPreRequestScriptIsError(t *testing.T) {
+	f, err := Parse([]byte("### a\n< {%\n  request.variables.set(\"id\", \"1\");\nGET https://example.com\n"))
+	if err == nil || !strings.Contains(err.Error(), "unclosed pre-request script") {
+		t.Fatalf("err = %v, want unclosed pre-request script", err)
+	}
+	if len(f.Requests) != 0 || len(f.ParseErrors) != 1 || f.ParseErrors[0].Line != 2 {
+		t.Errorf("Requests = %+v, ParseErrors = %v", f.Requests, f.ParseErrors)
+	}
+}
+
+func TestParseVerbatimBody_KeepsHandlerAndIncludeLinesInBody(t *testing.T) {
+	src := "POST https://example.com\nX-A: 1\n\nintro\n> quoted\n<> x.json\n< ./other\n< {% s %}\ntail\n"
+	f, err := ParseVerbatimBody([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	req := f.Requests[0]
+	if want := "intro\n> quoted\n<> x.json\n< ./other\n< {% s %}\ntail"; req.Body != want {
+		t.Errorf("Body = %q, want %q", req.Body, want)
+	}
+	if len(req.Unsupported) != 0 || len(req.Headers) != 1 {
+		t.Errorf("Unsupported = %v, Headers = %+v", req.Unsupported, req.Headers)
 	}
 }
