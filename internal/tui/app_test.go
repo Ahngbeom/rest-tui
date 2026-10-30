@@ -879,3 +879,47 @@ func TestApp_PromptClosedAfterOpenPathSwitch(t *testing.T) {
 		t.Error("q should quit")
 	}
 }
+
+func TestApp_CtrlCQuitsWhileEditorFocused(t *testing.T) {
+	a := pressKeys(newLayoutRequestApp(t, 80, 24), "i")
+	if !a.request.isEditing() {
+		t.Fatal("precondition: expected the raw-text editor to be focused")
+	}
+	if _, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil || cmd() != tea.Quit() {
+		t.Error("ctrl+c should quit while the editor is focused")
+	}
+}
+
+func TestApp_CtrlCQuitsWhilePathPromptOpen(t *testing.T) {
+	a := pressKeys(newTestApp(t), "o")
+	if !a.dirHistory.isPrompting() {
+		t.Fatal("precondition: expected the path prompt to be open")
+	}
+	if _, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil || cmd() != tea.Quit() {
+		t.Error("ctrl+c should quit while the path prompt is open")
+	}
+}
+
+func TestApp_OpeningAnotherRequestCancelsInFlightSend(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	a := newTestApp(t)
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: srv.URL + "/slow"}})
+	model, sendCmd := a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a = model.(App)
+	if !a.request.isSending() {
+		t.Fatal("precondition: expected the first request to be sending")
+	}
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: srv.URL + "/other"}})
+
+	start := time.Now()
+	msg := awaitMsg[execResultMsg](t, sendCmd)
+	if msg.entry.Error != "canceled" {
+		t.Errorf("old send Error = %q after %s, want canceled", msg.entry.Error, time.Since(start))
+	}
+}

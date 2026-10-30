@@ -107,6 +107,9 @@ func (a App) replaceBrowser(b browserModel) App {
 // openRequestView makes m the active Request view, applying the app-wide
 // request timeout and the current content size.
 func (a App) openRequestView(m requestModel, origin screen) App {
+	if a.request.isSending() && a.request.cancel != nil {
+		a.request.cancel()
+	}
 	a.requestOrigin = origin
 	a.request = m.withTimeout(a.opts.Timeout).SetSize(a.width, a.contentHeight())
 	a.screen = screenRequest
@@ -185,6 +188,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.resize(), nil
 
 	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			return a, tea.Quit
+		}
 		if msg.String() != "q" || a.activeScreenIsEditing() {
 			a = a.disarmQuit()
 		}
