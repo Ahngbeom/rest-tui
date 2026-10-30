@@ -24,6 +24,14 @@ type layoutScenario struct {
 }
 
 var layoutScenarios = []layoutScenario{
+	{"request-intellij-warnings", func(t *testing.T, w, h int) App {
+		root := t.TempDir()
+		a := newLayoutApp(t, root, newTestHistoryStore(t), w, h)
+		req := httpfile.Request{Method: "POST", URL: "{{host}}/very/long/path/segment/that/wraps", Body: "< ./missing-body-file.json",
+			Unsupported: []string{"pre-request script", "response handler script", "response handler script: ./check.js", "output redirect: ./out.json"}}
+		a = applyMsg(a, openRequestMsg{filePath: filepath.Join(root, "a.http"), file: &httpfile.File{}, req: req})
+		return pressKeys(a, "enter")
+	}},
 	{"browser-empty", func(t *testing.T, w, h int) App {
 		return newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), w, h)
 	}},

@@ -426,13 +426,17 @@ func (m requestModel) copyText() string {
 func (m requestModel) buildContent() (string, int) {
 	var head strings.Builder
 
+	if line := unsupportedLine(m.resolved.Unsupported); line != "" {
+		head.WriteString(warnTextStyle.Render(line))
+		head.WriteString("\n")
+	}
 	fmt.Fprintf(&head, "%s %s\n", m.resolved.Method, m.resolved.URL)
 	for _, h := range m.resolved.Headers {
 		fmt.Fprintf(&head, "%s: %s\n", h.Name, h.Value)
 	}
 	if m.resolved.Body != "" {
 		head.WriteString("\n")
-		head.WriteString(output.PrettyBody([]byte(m.resolved.Body), output.Options{Color: true}))
+		head.WriteString(output.PrettyBody([]byte(output.Sanitize(m.resolved.Body)), output.Options{Color: true}))
 		head.WriteString("\n")
 	}
 
@@ -550,11 +554,7 @@ func (m requestModel) title() string {
 func (m requestModel) canSend() bool { return len(m.missingVars) == 0 }
 
 func (m requestModel) blockedMessage() string {
-	names := make([]string, len(m.missingVars))
-	for i, name := range m.missingVars {
-		names[i] = "{{" + name + "}}"
-	}
-	return "cannot send: unresolved " + strings.Join(names, ", ") + " — e switch env · i edit"
+	return "cannot send: " + describeUnresolved(m.missingVars) + " — e switch env · i edit"
 }
 
 func (m requestModel) statusLine() string {
@@ -589,4 +589,36 @@ func (m requestModel) View() string {
 	}
 	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + body + "\n" + m.statusLine()
 	return paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(content)
+}
+
+func describeUnresolved(missing []string) string {
+	var vars, files []string
+	for _, entry := range missing {
+		if strings.HasPrefix(entry, env.MissingFilePrefix) {
+			files = append(files, entry)
+		} else {
+			vars = append(vars, "{{"+entry+"}}")
+		}
+	}
+	var parts []string
+	if len(vars) > 0 {
+		parts = append(parts, "unresolved "+strings.Join(vars, ", "))
+	}
+	parts = append(parts, files...)
+	return strings.Join(parts, "; ")
+}
+
+func unsupportedLine(items []string) string {
+	seen := make(map[string]bool, len(items))
+	var uniq []string
+	for _, item := range items {
+		if !seen[item] {
+			seen[item] = true
+			uniq = append(uniq, item)
+		}
+	}
+	if len(uniq) == 0 {
+		return ""
+	}
+	return "unsupported (ignored): " + strings.Join(uniq, ", ")
 }

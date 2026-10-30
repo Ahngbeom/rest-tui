@@ -1004,3 +1004,91 @@ func TestRequestModel_ApplyEditAddsHTTPScheme(t *testing.T) {
 		t.Errorf("editing = %v, URL = %q", m.editing, m.resolved.URL)
 	}
 }
+
+func TestDescribeUnresolved(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"token"}, "unresolved {{token}}"},
+		{[]string{"a", "b"}, "unresolved {{a}}, {{b}}"},
+		{[]string{"$foo"}, "unresolved {{$foo}}"},
+		{[]string{"missing file: ./body.json"}, "missing file: ./body.json"},
+		{[]string{"token", "missing file: ./body.json"}, "unresolved {{token}}; missing file: ./body.json"},
+	}
+	for _, c := range cases {
+		if got := describeUnresolved(c.in); got != c.want {
+			t.Errorf("describeUnresolved(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestRequestModel_ShowsUnsupportedWarningAndStillSends(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "https://example.com",
+		Unsupported: []string{"response handler script", "output redirect: ./out.json", "response handler script"}}
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
+	m = m.SetSize(120, 30)
+
+	content, _ := m.buildContent()
+	plain := ansiEscapePattern.ReplaceAllString(content, "")
+	if !strings.HasPrefix(plain, "unsupported (ignored): response handler script, output redirect: ./out.json\n") {
+		t.Errorf("content does not start with the unsupported warning:\n%s", plain)
+	}
+	if !m.canSend() {
+		t.Fatal("canSend() = false; unsupported items must not block sending")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("Enter returned no command")
+	}
+}
+
+func TestRequestModel_IncludesBodyFileRelativeToHTTPFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+	if m.resolved.Body != `{"a":1}` || !m.canSend() {
+		t.Errorf("Body = %q, canSend = %v", m.resolved.Body, m.canSend())
+	}
+}
+
+func TestRequestModel_MissingBodyFileBlocksSend(t *testing.T) {
+	dir := t.TempDir()
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+	m = m.SetSize(120, 30)
+
+	if m.canSend() {
+		t.Fatal("canSend() = true with a missing body file")
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.executing {
+		t.Error("Enter must not send when the body file is missing")
+	}
+	status := ansiEscapePattern.ReplaceAllString(m.statusLine(), "")
+	if !strings.Contains(status, "cannot send: missing file: ./body.json — e switch env · i edit") {
+		t.Errorf("statusLine() = %q", status)
+	}
+}
+
+func TestRequestModel_PreviewSanitizesIncludedFileContent(t *testing.T) {
+	dir := t.TempDir()
+	raw := "ok\x1b]0;pwned\x07\x1b[2J\x00end"
+	if err := os.WriteFile(filepath.Join(dir, "blob.bin"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./blob.bin"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+
+	if m.resolved.Body != raw {
+		t.Errorf("resolved.Body = %q, the sent body must stay byte-for-byte", m.resolved.Body)
+	}
+	content, _ := m.buildContent()
+	for _, bad := range []string{"\x1b]0;", "\x1b[2J", "\x00"} {
+		if strings.Contains(content, bad) {
+			t.Errorf("preview contains %q", bad)
+		}
+	}
+}
