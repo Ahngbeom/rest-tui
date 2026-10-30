@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -353,7 +354,7 @@ func TestApp_StaleExecResultDoesNotLandOnNewRequestView(t *testing.T) {
 	a = model.(App)
 	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: srv.URL + "/users"}})
 
-	a = applyMsg(a, sendCmd())
+	a = applyMsg(a, awaitMsg[execResultMsg](t, sendCmd))
 
 	if a.request.lastEntry != nil {
 		t.Errorf("listUsers view shows a response it never sent: %+v", a.request.lastEntry)
@@ -603,5 +604,85 @@ func TestApp_RerunMsgSendsImmediately(t *testing.T) {
 	}
 	if after := applyMsg(got, msg); after.request.lastEntry == nil || after.request.lastEntry.StatusCode != http.StatusOK {
 		t.Errorf("lastEntry = %+v, want StatusCode 200", after.request.lastEntry)
+	}
+}
+
+func newSendingTestApp(t *testing.T) App {
+	t.Helper()
+	a := applyMsg(newTestApp(t), openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+	a.request.executing = true
+	return a
+}
+
+func TestApp_QuitWhileSendingNeedsSecondQ(t *testing.T) {
+	a := newSendingTestApp(t)
+	model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd != nil {
+		t.Error("first q while sending should not quit")
+	}
+	if !strings.Contains(model.(App).View(), "request in flight — press q again to quit") {
+		t.Error("view missing quit confirmation")
+	}
+	_, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("second q should quit")
+	}
+}
+
+func TestApp_OtherKeyDisarmsQuit(t *testing.T) {
+	a := pressKeys(newSendingTestApp(t), "q", "j")
+	if a.quitArmed || a.statusMsg == quitConfirmMsg {
+		t.Errorf("quitArmed = %v, statusMsg = %q after another key", a.quitArmed, a.statusMsg)
+	}
+	model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd != nil {
+		t.Error("q after disarm should ask again, not quit")
+	}
+	if !strings.Contains(model.(App).View(), quitConfirmMsg) {
+		t.Error("view missing quit confirmation after re-arming")
+	}
+}
+
+func TestApp_CtrlCQuitsEvenWhileSending(t *testing.T) {
+	_, cmd := newSendingTestApp(t).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("ctrl+c should quit immediately while sending")
+	}
+}
+
+func TestApp_HelpQWhileSendingNeedsSecondQ(t *testing.T) {
+	a := pressKeys(newSendingTestApp(t), "?")
+	model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd != nil || model.(App).statusMsg != quitConfirmMsg {
+		t.Errorf("first q in help while sending: cmd = %v, statusMsg = %q", cmd != nil, model.(App).statusMsg)
+	}
+	_, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("second q in help should quit")
+	}
+}
+
+func TestApp_ResultArrivesWhileOnOtherScreen(t *testing.T) {
+	a := pressKeys(newSendingTestApp(t), "h")
+	if a.screen != screenHistory {
+		t.Fatalf("precondition: screen = %v", a.screen)
+	}
+	if _, cmd := a.Update(spinner.TickMsg{ID: a.request.spinner.ID()}); cmd == nil {
+		t.Error("spinner tick should reach the Request view from another screen")
+	}
+	a = applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200}})
+	if a.request.isSending() {
+		t.Error("result should reach the Request view from another screen")
+	}
+	_, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil || cmd() != tea.Quit() {
+		t.Error("q should quit once the request has finished")
+	}
+}
+
+func TestApp_FooterShowsEscCancelWhileSending(t *testing.T) {
+	plain := ansi.Strip(renderHints(newSendingTestApp(t).footerHints(), 500))
+	if !strings.Contains(plain, "esc cancel") || strings.Contains(plain, "esc back") {
+		t.Errorf("footer = %q, want esc cancel instead of esc back", plain)
 	}
 }

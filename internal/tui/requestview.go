@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -67,6 +68,9 @@ type requestModel struct {
 	editError string
 
 	executing   bool
+	spinner     spinner.Model
+	sendStarted time.Time
+	cancel      context.CancelFunc
 	lastEntry   *history.Entry
 	entryEnv    string
 	fromEntry   bool
@@ -95,6 +99,7 @@ func newRequestRand() *rand.Rand { return rand.New(rand.NewPCG(rand.Uint64(), ra
 func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel {
 	m := requestModel{id: nextRequestModelID(), filePath: filePath, root: root, file: file, req: req, store: store, envIndex: -1, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
+	m.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
@@ -129,6 +134,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 	}
 	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
+	m.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
@@ -272,6 +278,9 @@ func (m requestModel) sendTimeout() time.Duration {
 }
 
 func describeSendError(err error, timeout time.Duration) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Sprintf("timed out after %s (use -timeout to change)", timeout)
 	}
@@ -282,12 +291,16 @@ func describeSendError(err error, timeout time.Duration) string {
 // returns the command that performs the send. Callers check canSend first.
 func (m requestModel) startSend() (requestModel, tea.Cmd) {
 	m.executing = true
+	m.sendStarted = time.Now()
 	m.refreshContent()
 	m.scrollToResponse()
-	return m, m.sendCmd()
+	cmd := tea.Batch(m.sendCmd(), m.spinner.Tick)
+	return m, cmd
 }
 
-func (m requestModel) sendCmd() tea.Cmd {
+func (m requestModel) isSending() bool { return m.executing }
+
+func (m *requestModel) sendCmd() tea.Cmd {
 	resolved := m.resolved
 	timeout := m.sendTimeout()
 	store := m.store
@@ -296,8 +309,11 @@ func (m requestModel) sendCmd() tea.Cmd {
 	if envName == "" {
 		envName = m.entryEnv
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
 	return func() tea.Msg {
-		resp, err := executor.Execute(context.Background(), resolved, timeout)
+		defer cancel()
+		resp, err := executor.Execute(ctx, resolved, timeout)
 
 		entry := history.Entry{
 			Method:         resolved.Method,
@@ -335,6 +351,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			return m, nil
 		}
 		m.executing = false
+		m.cancel = nil
 		entry := msg.entry
 		m.lastEntry = &entry
 		m.historyWarn = msg.historyWarn
@@ -356,6 +373,13 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			m.copyStatus = "copied to clipboard"
 		}
 		return m, clearCopyStatusAfter(msg.token)
+	case spinner.TickMsg:
+		if !m.executing {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case clipboardCopyExpiredMsg:
 		if msg.token == m.copyToken {
 			m.copyStatus = ""
@@ -413,6 +437,12 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			m.copyToken++
 			return m, copyToClipboardCmd(m.copyText(), m.copyToken)
 		case key.Matches(msg, keys.Back):
+			if m.executing {
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, nil
+			}
 			return m, func() tea.Msg { return backToBrowserMsg{} }
 		}
 	}
@@ -619,6 +649,9 @@ func (m requestModel) statusLine() string {
 func (m requestModel) summaryLine() string {
 	w := m.viewport.Width
 	switch {
+	case m.executing:
+		elapsed := time.Since(m.sendStarted).Truncate(100 * time.Millisecond)
+		return ansi.Truncate(fmt.Sprintf("%s sending… %s · esc cancel", m.spinner.View(), elapsed), w, "…")
 	case m.lastEntry == nil:
 		return mutedTextStyle.Render("not sent")
 	case m.lastEntry.Error != "":

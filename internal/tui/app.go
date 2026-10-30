@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +23,8 @@ const (
 	headerHeight = 1
 	footerHeight = 1
 )
+
+const quitConfirmMsg = "request in flight — press q again to quit"
 
 type screen int
 
@@ -52,6 +55,7 @@ type App struct {
 	showHelp     bool
 	helpViewport viewport.Model
 	statusMsg    string
+	quitArmed    bool
 }
 
 // Options configures behavior that comes from the command line.
@@ -146,13 +150,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.resize(), nil
 
 	case tea.KeyMsg:
+		if msg.String() != "q" {
+			a = a.disarmQuit()
+		}
 		if a.showHelp {
 			return a.updateHelp(msg)
 		}
 		if !a.activeScreenIsEditing() {
 			switch {
 			case key.Matches(msg, keys.Quit):
-				return a, tea.Quit
+				return a.handleQuit(msg)
 			case key.Matches(msg, keys.Help):
 				a.showHelp = true
 				a.helpViewport.GotoTop()
@@ -167,6 +174,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a.applyStoreWarning(), nil
 			}
 		}
+
+	case execResultMsg, spinner.TickMsg:
+		var cmd tea.Cmd
+		a.request, cmd = a.request.Update(msg)
+		if !a.request.isSending() {
+			a = a.disarmQuit()
+		}
+		return a.applyStoreWarning(), cmd
 
 	case openRequestMsg:
 		return a.openRequestView(newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv)), nil
@@ -227,13 +242,31 @@ func (a App) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Help), msg.Type == tea.KeyEsc:
 		a.showHelp = false
 	case key.Matches(msg, keys.Quit):
-		return a, tea.Quit
+		return a.handleQuit(msg)
 	case key.Matches(msg, keys.Up):
 		a.helpViewport.ScrollUp(1)
 	case key.Matches(msg, keys.Down):
 		a.helpViewport.ScrollDown(1)
 	}
 	return a, nil
+}
+
+func (a App) handleQuit(msg tea.KeyMsg) (App, tea.Cmd) {
+	if msg.String() == "q" && a.request.isSending() && !a.quitArmed {
+		a.quitArmed = true
+		a.statusMsg = quitConfirmMsg
+		return a.resize(), nil
+	}
+	return a, tea.Quit
+}
+
+func (a App) disarmQuit() App {
+	a.quitArmed = false
+	if a.statusMsg == quitConfirmMsg {
+		a.statusMsg = ""
+		a = a.resize()
+	}
+	return a
 }
 
 func (a App) breadcrumb() string {
@@ -269,7 +302,11 @@ func (a App) footerHints() []hint {
 		if a.request.canSend() {
 			hints = append(hints, hint{"enter/ctrl+r", "send"})
 		}
-		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"g/G", "top/bottom"}, hint{"c", "copy"}, hint{"i", "edit"}, hint{"esc", "back"}, hint{"h", "history"}, hint{"d", "dirs"})
+		esc := hint{"esc", "back"}
+		if a.request.isSending() {
+			esc = hint{"esc", "cancel"}
+		}
+		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"g/G", "top/bottom"}, hint{"c", "copy"}, hint{"i", "edit"}, esc, hint{"h", "history"}, hint{"d", "dirs"})
 		return append(hints, tail...)
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
@@ -289,7 +326,7 @@ func (a App) footerHints() []hint {
 func helpLines() []string {
 	return []string{
 		"Global",
-		"  q, ctrl+c     quit",
+		"  q, ctrl+c     quit (q twice while a request is in flight)",
 		"  h             jump to History",
 		"  d             jump to Directory History",
 		"  ?             toggle this help",
@@ -307,6 +344,7 @@ func helpLines() []string {
 		"  g/G, home/end top / bottom of response",
 		"  c, y          copy request/response",
 		"  i             edit request (method/URL/headers/body)",
+		"  esc           cancel send (while sending) / back",
 		"  ctrl+s, esc   apply / cancel edit (while editing)",
 		"",
 		"History",

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -905,7 +906,7 @@ func TestRequestModel_SendRecordsEnvInHistory(t *testing.T) {
 	m := newRequestModel(filepath.Join(root, "a.http"), root, &httpfile.File{}, httpfile.Request{Method: "GET", URL: "{{host}}/x"}, store, "")
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	msg := cmd().(execResultMsg)
+	msg := awaitMsg[execResultMsg](t, cmd)
 	if msg.entry.Env != "dev" {
 		t.Errorf("entry.Env = %q, want dev", msg.entry.Env)
 	}
@@ -920,7 +921,7 @@ func TestRequestModel_RerunRecordsOriginalEnv(t *testing.T) {
 
 	m := newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: srv.URL, Env: "staging"}, newTestHistoryStore(t))
 	_, cmd := m.startSend()
-	if got := cmd().(execResultMsg).entry.Env; got != "staging" {
+	if got := awaitMsg[execResultMsg](t, cmd).entry.Env; got != "staging" {
 		t.Errorf("entry.Env = %q, want staging", got)
 	}
 }
@@ -1103,7 +1104,7 @@ func TestRequestModel_SendsDisplayedDynamicValue(t *testing.T) {
 		t.Fatalf("preview does not show %q", shown)
 	}
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	res := cmd().(execResultMsg)
+	res := awaitMsg[execResultMsg](t, cmd)
 	if sent := <-got; sent != shown {
 		t.Errorf("sent X-Request-Id = %q, preview showed %q", sent, shown)
 	}
@@ -1371,5 +1372,79 @@ func TestRequestModel_StatusLineOmitsPercentWhileEditing(t *testing.T) {
 	}
 	if got := ansi.Strip(m.View()); !strings.Contains(got, "200 OK") {
 		t.Error("summary line should stay visible while editing")
+	}
+}
+
+func TestDescribeSendError_Canceled(t *testing.T) {
+	if got := describeSendError(fmt.Errorf("x: %w", context.Canceled), 30*time.Second); got != "canceled" {
+		t.Errorf("describeSendError = %q, want canceled", got)
+	}
+}
+
+func TestRequestModel_SendStoresCancelOnReturnedModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: srv.URL})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.isSending() || m.cancel == nil || m.sendStarted.IsZero() {
+		t.Errorf("isSending = %v, cancel set = %v, sendStarted = %v", m.isSending(), m.cancel != nil, m.sendStarted)
+	}
+	_ = awaitMsg[spinner.TickMsg](t, cmd)
+}
+
+func TestRequestModel_SpinnerTickStopsWhenNotSending(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"})
+	m.executing = true
+	_, cmd := m.Update(spinner.TickMsg{ID: m.spinner.ID()})
+	if cmd == nil {
+		t.Error("tick while sending should schedule the next tick")
+	}
+	m.executing = false
+	_, cmd = m.Update(spinner.TickMsg{ID: m.spinner.ID()})
+	if cmd != nil {
+		t.Error("tick after sending should stop the chain")
+	}
+}
+
+func TestRequestModel_SummaryLineWhileSendingShowsElapsed(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x/"})
+	m.executing = true
+	m.sendStarted = time.Now().Add(-2500 * time.Millisecond)
+	if got := ansi.Strip(m.summaryLine()); !regexp.MustCompile(`sending… 2\.[5-9]s · esc cancel$`).MatchString(got) {
+		t.Errorf("summaryLine = %q", got)
+	}
+}
+
+func TestRequestModel_EscWhileSendingCancelsAndRecordsCanceled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	store := newTestHistoryStore(t)
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: srv.URL}, store, "").SetSize(120, 35)
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, back := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if back != nil {
+		t.Error("esc while sending should not navigate back")
+	}
+	if !m.isSending() {
+		t.Error("esc should leave the model sending until the result arrives")
+	}
+	msg := awaitMsg[execResultMsg](t, cmd)
+	if msg.entry.Error != "canceled" {
+		t.Errorf("entry.Error = %q, want canceled", msg.entry.Error)
+	}
+	if got, err := store.List(1); err != nil || len(got) != 1 || got[0].Error != "canceled" {
+		t.Errorf("history = %+v, %v, want one canceled entry", got, err)
+	}
+	m, _ = m.Update(msg)
+	if m.isSending() || m.cancel != nil {
+		t.Errorf("isSending = %v, cancel set = %v after result", m.isSending(), m.cancel != nil)
+	}
+	if got := ansi.Strip(m.summaryLine()); got != "ERR · canceled" {
+		t.Errorf("summaryLine = %q, want %q", got, "ERR · canceled")
 	}
 }

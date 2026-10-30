@@ -67,6 +67,11 @@ var layoutScenarios = []layoutScenario{
 		a := newLayoutRequestApp(t, w, h)
 		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, ResponseBody: strings.Repeat("한글 응답 본문 ", 80)}})
 	}},
+	{"request-sending-quit-confirm", func(t *testing.T, w, h int) App {
+		a := newLayoutRequestApp(t, w, h)
+		a.request.executing = true
+		return pressKeys(a, "q")
+	}},
 	{"request-copy-status", func(t *testing.T, w, h int) App {
 		a := newLayoutRequestApp(t, w, h)
 		return applyMsg(a, clipboardCopyMsg{token: a.request.copyToken})
