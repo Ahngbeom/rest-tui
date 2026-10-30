@@ -45,6 +45,29 @@ var layoutScenarios = []layoutScenario{
 		}
 		return a
 	}},
+	{"request-long-response", func(t *testing.T, w, h int) App {
+		a := newLayoutRequestApp(t, w, h)
+		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, ResponseBody: `{"path":"` + strings.Repeat("segment/", 60) + `","text":"` + strings.Repeat("lorem ipsum ", 40) + `"}`}})
+	}},
+	{"request-cjk-response", func(t *testing.T, w, h int) App {
+		a := newLayoutRequestApp(t, w, h)
+		return applyMsg(a, execResultMsg{modelID: a.request.id, entry: history.Entry{StatusCode: 200, ResponseBody: strings.Repeat("한글 응답 본문 ", 80)}})
+	}},
+	{"request-copy-status", func(t *testing.T, w, h int) App {
+		a := newLayoutRequestApp(t, w, h)
+		return applyMsg(a, clipboardCopyMsg{token: a.request.copyToken})
+	}},
+	{"request-edit-error", func(t *testing.T, w, h int) App {
+		a := pressKeys(newLayoutRequestApp(t, w, h), "i")
+		a.request.editor.SetValue("GET https://example.com\n" + strings.Repeat("bad ", 60) + "\n")
+		return pressKeys(a, "ctrl+s")
+	}},
+}
+
+func newLayoutRequestApp(t *testing.T, w, h int) App {
+	t.Helper()
+	a := newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), w, h)
+	return applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com/users"}})
 }
 
 func newLayoutApp(t *testing.T, root string, store *history.Store, width, height int) App {

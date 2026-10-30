@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -75,6 +77,7 @@ func wrapToWidth(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
+	s = strings.ReplaceAll(s, "\t", "    ") // lipgloss Render's default tab width; a raw tab would re-wrap there
 	wrapped := ansi.Hardwrap(s, width, false)
 	return hyperlinkURLs(s, wrapped)
 }

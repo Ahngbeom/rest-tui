@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
@@ -590,5 +592,49 @@ func TestRequestModel_IgnoresExecResultFromAnotherModel(t *testing.T) {
 	b, cmd := b.Update(execResultMsg{modelID: a.id, entry: history.Entry{StatusCode: 200}})
 	if b.lastEntry != nil || cmd != nil {
 		t.Errorf("lastEntry = %+v, cmd = %v, want the foreign result ignored", b.lastEntry, cmd)
+	}
+}
+
+func TestRequestModel_ViewportWidthMatchesPaneInnerWidth(t *testing.T) {
+	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(60, 20)
+	if want := 60 - paneFocusedStyle.GetHorizontalFrameSize(); m.viewport.Width != want {
+		t.Errorf("viewport.Width = %d, want %d", m.viewport.Width, want)
+	}
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, ResponseBody: strings.Repeat("x", 100)}})
+	view := m.View()
+	assertViewFits(t, view, 60, 20)
+	var runs []int
+	for _, r := range regexp.MustCompile(`x{10,}`).FindAllString(ansi.Strip(view), -1) {
+		runs = append(runs, len(r))
+	}
+	if !reflect.DeepEqual(runs, []int{56, 44}) {
+		t.Errorf("x runs = %v, want [56 44] (wrapped exactly once)", runs)
+	}
+}
+
+func TestRequestModel_StatusRowIsReservedForCopyAndEditError(t *testing.T) {
+	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(80, 24)
+	if h := lipgloss.Height(m.View()); h != 24 {
+		t.Fatalf("idle height = %d, want 24", h)
+	}
+	m, _ = m.Update(clipboardCopyMsg{token: m.copyToken})
+	if h := lipgloss.Height(m.View()); h != 24 || !strings.Contains(m.statusLine(), "copied to clipboard") {
+		t.Errorf("after copy: height = %d, statusLine = %q", h, m.statusLine())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m.editor.SetValue("GET https://example.com\nbad header line\n")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if h := lipgloss.Height(m.View()); h != 24 || !strings.HasPrefix(ansi.Strip(m.statusLine()), "line 2:") {
+		t.Errorf("after edit error: height = %d, statusLine = %q", h, m.statusLine())
+	}
+}
+
+func TestRequestModel_TabIndentedBodyEndStaysReachable(t *testing.T) {
+	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(60, 20)
+	body := strings.Repeat("\t\t\t<p>"+strings.Repeat("word ", 9)+"</p>\n", 30) + "\t\tTHE-END"
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: body}})
+	m.viewport.GotoBottom()
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "THE-END") {
+		t.Errorf("last body line unreachable after scrolling to the bottom:\n%s", v)
 	}
 }

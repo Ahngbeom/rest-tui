@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/env"
 	"github.com/Ahngbeom/rest-tui/internal/executor"
@@ -169,22 +170,12 @@ func (m *requestModel) scrollToResponse() {
 
 func (m requestModel) SetSize(width, height int) requestModel {
 	m.width, m.height = width, height
-	innerWidth := width - 4   // rounded border + horizontal padding
-	innerHeight := height - 3 // border rows (2) + fixed env line (1)
-	if innerWidth < 0 {
-		innerWidth = 0
-	}
-	if innerHeight < 0 {
-		innerHeight = 0
-	}
+	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
+	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize()-2) // env line + status line
 	m.viewport.Width = innerWidth
 	m.viewport.Height = innerHeight
 	m.editor.SetWidth(innerWidth)
-	// -1: the focused cursor line's nested ANSI styling makes the outer
-	// bordered pane style mis-measure that one line's width, wrapping it
-	// onto an extra row and pushing the header off-screen at exactly
-	// innerHeight. Reserving one row avoids ever hitting that edge.
-	m.editor.SetHeight(innerHeight - 1)
+	m.editor.SetHeight(innerHeight)
 	m.refreshContent()
 	return m
 }
@@ -441,22 +432,26 @@ func (m requestModel) title() string {
 	return m.req.Method + " " + m.req.URL
 }
 
-func (m requestModel) View() string {
-	var content string
-	if m.editing {
-		content = m.envLine() + "\n" + m.editor.View()
-		if m.editError != "" {
-			content += "\n" + errorTextStyle.Render(m.editError)
-		}
-	} else {
-		content = m.envLine() + "\n" + m.viewport.View()
-		if m.copyStatus != "" {
-			style := copiedTextStyle
-			if m.copyErr {
-				style = errorTextStyle
-			}
-			content += "\n" + style.Render(m.copyStatus)
-		}
+func (m requestModel) statusLine() string {
+	text, style := m.copyStatus, copiedTextStyle
+	if m.copyErr {
+		style = errorTextStyle
 	}
-	return paneFocusedStyle.Width(m.width - 4).Render(content)
+	if m.editing {
+		text, style = m.editError, errorTextStyle
+	}
+	if text == "" {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	return style.Render(ansi.Truncate(text, m.viewport.Width, "…"))
+}
+
+func (m requestModel) View() string {
+	body := m.viewport.View()
+	if m.editing {
+		body = m.editor.View()
+	}
+	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + body + "\n" + m.statusLine()
+	return paneFocusedStyle.Width(m.width - paneFocusedStyle.GetHorizontalBorderSize()).Render(content)
 }
