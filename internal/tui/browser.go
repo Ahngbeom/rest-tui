@@ -168,14 +168,11 @@ func (m browserModel) SetSize(width, height int) browserModel {
 	return m
 }
 
-// paneWidths splits the full width 40/60 between Files and Requests.
 func (m browserModel) paneWidths() (filesW, reqW int) {
 	filesW = m.width * 40 / 100
 	return filesW, m.width - filesW
 }
 
-// parseWarningLines wraps the parse-warning banner to width and keeps at most
-// three lines: the first two plus a "… +N more" line counting hidden lines.
 func (m browserModel) parseWarningLines(width int) []string {
 	if m.parsedFile == nil || len(m.parsedFile.ParseErrors) == 0 {
 		return nil

@@ -175,7 +175,7 @@ func TestRenderResponse_SanitizesHeadersAndBody(t *testing.T) {
 	}
 	resp = &executor.Response{Status: "200 OK", Body: []byte("{\"a\":\"x\u009b2Jy\"}")}
 	if got := RenderResponse(resp, Options{Color: true}); strings.Contains(got, "\u009b") || !strings.Contains(got, "2Jy") {
-		t.Errorf("RenderResponse(JSON with raw C1) = %q, want C1 removed and JSON still colored", got)
+		t.Errorf("RenderResponse(JSON with raw C1) = %q, want C1 removed", got)
 	}
 }
 

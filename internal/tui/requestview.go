@@ -453,5 +453,5 @@ func (m requestModel) View() string {
 		body = m.editor.View()
 	}
 	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + body + "\n" + m.statusLine()
-	return paneFocusedStyle.Width(m.width - paneFocusedStyle.GetHorizontalBorderSize()).Render(content)
+	return paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(content)
 }

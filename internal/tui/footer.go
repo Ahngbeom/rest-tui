@@ -11,9 +11,6 @@ type hint struct{ key, desc string }
 
 const hintSeparator = "  "
 
-// renderHints joins hints to fit width. The last two hints (help, quit) are
-// never dropped; earlier ones are removed starting next to them, so the
-// screen-specific hints at the front survive longest.
 func renderHints(hints []hint, width int) string {
 	join := func(hs []hint) string {
 		parts := make([]string, len(hs))

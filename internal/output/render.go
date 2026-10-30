@@ -23,9 +23,8 @@ type Options struct {
 }
 
 // RenderResponse formats resp as "status (duration)", followed by headers
-// sorted by name, followed by the body (pretty-printed if it is valid JSON,
-// passed through unchanged otherwise). Sections with nothing to show are
-// omitted.
+// sorted by name, followed by the body (pretty-printed if it is valid JSON).
+// Sections with nothing to show are omitted.
 func RenderResponse(resp *executor.Response, opts Options) string {
 	sections := []string{fmt.Sprintf("%s (%s)", Sanitize(resp.Status), resp.Duration.Round(time.Millisecond))}
 
