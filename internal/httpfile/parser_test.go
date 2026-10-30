@@ -370,3 +370,41 @@ func TestParse_PreRequestScriptIsRemovedAndRecorded(t *testing.T) {
 		t.Errorf("Unsupported = %v, want %v", req.Unsupported, want)
 	}
 }
+
+func TestParse_StripsResponseHistoryLinks(t *testing.T) {
+	cases := map[string]string{
+		"after body":    "POST https://example.com\n\n{\"a\":1}\n\n<> 2024-05-01T120000.200.json\n",
+		"after handler": "POST https://example.com\n\n{\"a\":1}\n\n> {% client.log(1); %}\n\n<> x.json\n",
+		"no body":       "GET https://example.com\n\n<> 2024-05-01T120000.200.json\n<> 2024-05-02T120000.200.json\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			f, err := Parse([]byte(src))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			req := f.Requests[0]
+			wantBody := `{"a":1}`
+			if name == "no body" {
+				wantBody = ""
+			}
+			if req.Body != wantBody {
+				t.Errorf("Body = %q, want %q", req.Body, wantBody)
+			}
+			wantUnsupported := 0
+			if name == "after handler" {
+				wantUnsupported = 1
+			}
+			if len(req.Unsupported) != wantUnsupported {
+				t.Errorf("Unsupported = %v", req.Unsupported)
+			}
+		})
+	}
+}
+
+func TestParse_IndentedHistoryLinkInBodyIsKept(t *testing.T) {
+	f, _ := Parse([]byte("POST https://example.com\n\nx\n  <> y.json\n"))
+	if got := f.Requests[0].Body; got != "x\n  <> y.json" {
+		t.Errorf("Body = %q", got)
+	}
+}

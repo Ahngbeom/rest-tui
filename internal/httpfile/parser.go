@@ -176,7 +176,11 @@ func splitResponseHandlers(lines []string) (body []string, unsupported []string)
 			break
 		}
 	}
-	body = lines[:start]
+	for _, l := range lines[:start] {
+		if !strings.HasPrefix(l, "<>") {
+			body = append(body, l)
+		}
+	}
 	for j := start; j < len(lines); j++ {
 		l := strings.TrimSpace(lines[j])
 		switch {
