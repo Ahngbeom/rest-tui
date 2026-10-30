@@ -1183,3 +1183,14 @@ func TestRequestModel_CopyTextUsesSentRequestAfterRegenerate(t *testing.T) {
 		t.Errorf("copyText() while resending = %q, want the request being sent", got)
 	}
 }
+
+func TestUnsupportedLineAndBlockedMessageStripEscapes(t *testing.T) {
+	evil := "\x1b]0;PWNED\x07\x1b[2J"
+	if got := unsupportedLine([]string{"output redirect: ./" + evil + "x"}); got == "" || strings.Contains(got, "\x1b") {
+		t.Errorf("unsupportedLine() = %q", got)
+	}
+	m := requestModel{missingVars: []string{"missing file: ./" + evil + "x", "va" + evil + "r"}}
+	if got := m.blockedMessage(); strings.Contains(got, "\x1b") {
+		t.Errorf("blockedMessage() = %q", got)
+	}
+}

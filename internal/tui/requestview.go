@@ -603,6 +603,7 @@ func (m requestModel) View() string {
 func describeUnresolved(missing []string) string {
 	var vars, files []string
 	for _, entry := range missing {
+		entry = output.Sanitize(entry)
 		if strings.HasPrefix(entry, env.MissingFilePrefix) {
 			files = append(files, entry)
 		} else {
@@ -621,6 +622,7 @@ func unsupportedLine(items []string) string {
 	seen := make(map[string]bool, len(items))
 	var uniq []string
 	for _, item := range items {
+		item = output.Sanitize(item)
 		if !seen[item] {
 			seen[item] = true
 			uniq = append(uniq, item)
