@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 )
@@ -364,5 +368,54 @@ func TestBrowserModel_SelectFileResetsRequestCursorToFirst(t *testing.T) {
 	}
 	if msg, ok := cmd().(openRequestMsg); !ok || msg.req.URL != "https://b.example/only" {
 		t.Errorf("cmd() = %#v, want openRequestMsg for b.example/only", cmd())
+	}
+}
+
+func TestBrowserModel_PanesSplitFullWidth40And60(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "GET https://example.com\n")
+	for _, w := range []int{60, 80, 120, 200} {
+		view := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(w, 20).View()
+		lines := strings.Split(view, "\n")
+		for i, ln := range lines {
+			if lipgloss.Width(ln) != w {
+				t.Errorf("w=%d line %d width = %d, want %d", w, i, lipgloss.Width(ln), w)
+			}
+		}
+		top := []rune(ansi.Strip(lines[0]))
+		if filesW := w * 40 / 100; len(top) != w || top[filesW-1] != '┓' || top[w-1] != '╮' {
+			t.Errorf("w=%d top border = %q, want Files corner at col %d and Requests corner at col %d", w, string(top), filesW, w)
+		}
+	}
+}
+
+func brokenHTTPContent() string {
+	content := "### good\nGET https://example.com/good\n"
+	for i := 0; i < 5; i++ {
+		content += fmt.Sprintf("\n### bad%d\nthis is not a request line number %d with extra words\n", i, i)
+	}
+	return content
+}
+
+func TestBrowserModel_ParseWarningWrapsToAtMostThreeLines(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "broken.http", brokenHTTPContent())
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(80, 24)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	inner := 80 - 80*40/100 - paneStyle.GetHorizontalFrameSize()
+	lines := m.parseWarningLines(inner)
+	if len(lines) != 3 || !regexp.MustCompile(`^… \+\d+ more$`).MatchString(lines[2]) {
+		t.Fatalf("parseWarningLines = %q, want 2 lines + \"… +N more\"", lines)
+	}
+	for _, ln := range lines {
+		if lipgloss.Width(ln) > inner {
+			t.Errorf("warning line %q wider than %d", ln, inner)
+		}
+	}
+	view := m.View()
+	assertViewFits(t, view, 80, 24)
+	if !strings.Contains(ansi.Strip(view), "good") {
+		t.Error("the valid request disappeared from the Requests pane")
 	}
 }

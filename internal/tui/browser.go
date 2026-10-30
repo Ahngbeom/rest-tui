@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
@@ -154,11 +156,36 @@ func (m browserModel) Init() tea.Cmd {
 
 func (m browserModel) SetSize(width, height int) browserModel {
 	m.width, m.height = width, height
-	half := width / 2
-	// Account for the rounded-border pane frame (2 cols/rows each side).
-	m.files.SetSize(half-4, height-2)
-	m.requests.SetSize(width-half-4, height-2)
+	filesW, reqW := m.paneWidths()
+	frameW, frameH := paneStyle.GetHorizontalFrameSize(), paneStyle.GetVerticalFrameSize()
+	m.files.SetSize(max(0, filesW-frameW), max(0, height-frameH))
+
+	warnRows := 0
+	if lines := m.parseWarningLines(max(0, reqW-frameW)); len(lines) > 0 {
+		warnRows = len(lines) + 1
+	}
+	m.requests.SetSize(max(0, reqW-frameW), max(0, height-frameH-warnRows))
 	return m
+}
+
+// paneWidths splits the full width 40/60 between Files and Requests.
+func (m browserModel) paneWidths() (filesW, reqW int) {
+	filesW = m.width * 40 / 100
+	return filesW, m.width - filesW
+}
+
+// parseWarningLines wraps the parse-warning banner to width and keeps at most
+// three lines: the first two plus a "… +N more" line counting hidden lines.
+func (m browserModel) parseWarningLines(width int) []string {
+	if m.parsedFile == nil || len(m.parsedFile.ParseErrors) == 0 {
+		return nil
+	}
+	text := "parse warning: " + joinParseErrors(m.parsedFile.ParseErrors)
+	lines := strings.Split(ansi.Wrap(text, width, ""), "\n")
+	if len(lines) <= 3 {
+		return lines
+	}
+	return []string{lines[0], lines[1], fmt.Sprintf("… +%d more", len(lines)-2)}
 }
 
 // selectFile parses the currently highlighted file in the files pane and, on
@@ -182,7 +209,7 @@ func (m browserModel) selectFile() browserModel {
 		m.parsedFile = nil
 		m.requests.SetItems(nil)
 		m.requests.Select(0)
-		return m
+		return m.SetSize(m.width, m.height)
 	}
 
 	f, parseErr := httpfile.Parse(data)
@@ -197,7 +224,7 @@ func (m browserModel) selectFile() browserModel {
 		// Every block failed to parse: nothing to show.
 		m.parseErr = parseErr
 		m.parsedFile = nil
-		return m
+		return m.SetSize(m.width, m.height)
 	}
 
 	// Either some/all requests parsed, or the file legitimately has none
@@ -206,7 +233,7 @@ func (m browserModel) selectFile() browserModel {
 	m.parseErr = nil
 	m.parsedFile = f
 	m.focus = paneRequests
-	return m
+	return m.SetSize(m.width, m.height)
 }
 
 func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
@@ -279,23 +306,33 @@ func (m browserModel) View() string {
 		requestsPane = browserActivePaneStyle
 	}
 
+	filesW, reqW := m.paneWidths()
+	frameW, frameH := paneStyle.GetHorizontalFrameSize(), paneStyle.GetVerticalFrameSize()
+	borderW, borderH := paneStyle.GetHorizontalBorderSize(), paneStyle.GetVerticalBorderSize()
+	innerH := max(0, m.height-frameH)
+
 	left := files.View()
 	if m.rootErr != nil {
-		left = errorTextStyle.Render("cannot scan directory:\n" + m.rootErr.Error())
+		left = errorTextStyle.Render(fitLines("cannot scan directory:\n"+m.rootErr.Error(), max(0, filesW-frameW), innerH))
 	}
 
 	right := requests.View()
 	switch {
 	case m.parseErr != nil:
-		right = errorTextStyle.Render("parse error:\n" + m.parseErr.Error())
-	case m.parsedFile != nil && len(m.parsedFile.ParseErrors) > 0:
-		right = errorTextStyle.Render("parse warning: "+joinParseErrors(m.parsedFile.ParseErrors)) + "\n\n" + right
+		right = errorTextStyle.Render(fitLines("parse error:\n"+m.parseErr.Error(), max(0, reqW-frameW), innerH))
+	default:
+		if lines := m.parseWarningLines(max(0, reqW-frameW)); len(lines) > 0 {
+			for i, ln := range lines {
+				lines[i] = errorTextStyle.Render(ln)
+			}
+			right = strings.Join(lines, "\n") + "\n\n" + right
+		}
 	}
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		filesPane.Render(left),
-		requestsPane.Render(right),
+		filesPane.Width(max(0, filesW-borderW)).Height(max(0, m.height-borderH)).Render(left),
+		requestsPane.Width(max(0, reqW-borderW)).Height(max(0, m.height-borderH)).Render(right),
 	)
 }
 

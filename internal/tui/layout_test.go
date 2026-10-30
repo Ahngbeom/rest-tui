@@ -62,6 +62,20 @@ var layoutScenarios = []layoutScenario{
 		a.request.editor.SetValue("GET https://example.com\n" + strings.Repeat("bad ", 60) + "\n")
 		return pressKeys(a, "ctrl+s")
 	}},
+	{"browser-parse-warning", func(t *testing.T, w, h int) App {
+		root := t.TempDir()
+		writeTestFile(t, root, "broken.http", brokenHTTPContent())
+		return pressKeys(newLayoutApp(t, root, newTestHistoryStore(t), w, h), "enter")
+	}},
+	{"browser-file-parse-error", func(t *testing.T, w, h int) App {
+		root := t.TempDir()
+		writeTestFile(t, root, "bad.http", "this is not a request "+strings.Repeat("word ", 40)+"\n")
+		return pressKeys(newLayoutApp(t, root, newTestHistoryStore(t), w, h), "enter")
+	}},
+	{"browser-scan-error", func(t *testing.T, w, h int) App {
+		root := filepath.Join(t.TempDir(), strings.Repeat("missing-directory-", 10))
+		return newLayoutApp(t, root, newTestHistoryStore(t), w, h)
+	}},
 }
 
 func newLayoutRequestApp(t *testing.T, w, h int) App {
