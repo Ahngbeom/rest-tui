@@ -741,8 +741,32 @@ func TestRequestModel_EnvLineShowsParseError(t *testing.T) {
 	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{ broken`)
 
 	m := openAt(t, root, "a.http", "")
-	if got := plainText(m.envLine()); !strings.HasPrefix(got, "http-client.env.json: ") {
-		t.Errorf("envLine = %q, want prefix %q", got, "http-client.env.json: ")
+	if got := plainText(m.envLine()); !strings.HasPrefix(got, "./http-client.env.json: ") {
+		t.Errorf("envLine = %q, want prefix %q", got, "./http-client.env.json: ")
+	}
+}
+
+func TestRequestModel_EnvLineParseErrorNamesAncestorFolder(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "api", "http-client.env.json"), `{ broken`)
+
+	m := openAt(t, root, "api/v1/a.http", "")
+	got := plainText(m.envLine())
+	if !strings.HasPrefix(got, "api/http-client.env.json: ") || strings.Contains(got, "http-client.env.json: http-client.env.json") {
+		t.Errorf("envLine = %q, want prefix %q once", got, "api/http-client.env.json: ")
+	}
+}
+
+func TestNewRequestModelFromEntry_UnresolvedRerunIsNotSent(t *testing.T) {
+	m, cmd := newRequestModelFromEntry(history.Entry{Method: "GET", URL: "https://example.com/{{id}}"}, newTestHistoryStore(t))
+	if cmd != nil {
+		t.Error("cmd != nil, want no send for an unresolved entry")
+	}
+	if m.executing {
+		t.Error("executing = true, want false")
+	}
+	if got := plainText(m.SetSize(120, 30).statusLine()); !strings.Contains(got, "cannot send") {
+		t.Errorf("statusLine = %q, want cannot-send notice", got)
 	}
 }
 

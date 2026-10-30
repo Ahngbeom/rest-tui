@@ -36,10 +36,12 @@ func (e entryItem) Title() string {
 		status = "ERR"
 	}
 	stamp := e.entry.Timestamp.Format("15:04:05")
+	sep := "  "
 	if e.entry.Env != "" {
 		stamp += "  [" + e.entry.Env + "]"
+		sep = " "
 	}
-	return fmt.Sprintf("%s %s %s -> %s", stamp, e.entry.Method, e.entry.URL, status)
+	return fmt.Sprintf("%s%s%s %s -> %s", stamp, sep, e.entry.Method, e.entry.URL, status)
 }
 
 func (e entryItem) Description() string {

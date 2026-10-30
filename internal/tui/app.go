@@ -197,8 +197,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenBrowser:
 		a.browser, cmd = a.browser.Update(msg)
 	case screenRequest:
+		before := a.request.currentEnv()
 		a.request, cmd = a.request.Update(msg)
-		if env := a.request.currentEnv(); env != "" {
+		if env := a.request.currentEnv(); env != "" && env != before {
 			a.lastEnv = env
 		}
 	case screenHistory:

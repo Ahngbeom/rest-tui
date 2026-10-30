@@ -495,6 +495,24 @@ func TestApp_SelectedEnvCarriesToNextRequest(t *testing.T) {
 	}
 }
 
+func TestApp_UntouchedDefaultEnvDoesNotBecomeSessionEnv(t *testing.T) {
+	a := newTestApp(t)
+	writeNestedFile(t, filepath.Join(a.root, "http-client.env.json"), `{"dev": {}, "prod": {}}`)
+	writeNestedFile(t, filepath.Join(a.root, "solo", "http-client.env.json"), `{"prod": {}}`)
+	open := func(a App, path string) App {
+		model, _ := a.Update(openRequestMsg{filePath: path, file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+		return model.(App)
+	}
+
+	a = open(a, filepath.Join(a.root, "a.http"))
+	a = open(a, filepath.Join(a.root, "solo", "s.http"))
+	model, _ := a.Update(typeRunes("j"))
+	a = model.(App)
+	if got := open(a, filepath.Join(a.root, "b.http")).request.currentEnv(); got != "dev" {
+		t.Errorf("env after viewing a prod-only folder = %q, want dev", got)
+	}
+}
+
 func footerLine(a App) string {
 	lines := strings.Split(a.View(), "\n")
 	return plainText(lines[len(lines)-1])

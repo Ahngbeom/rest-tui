@@ -91,7 +91,9 @@ rest-tui -dir <path-to-http-files>
 
 ## Environment configuration
 
-`.http` 파일이 있는 디렉터리부터 `-dir` 루트까지 위로 올라가며 가장 가까운 디렉터리의 IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다.
+IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다. 환경 파일은 `.http` 파일이 있는 디렉터리에서 시작해 `-dir` 루트까지 위로 올라가며 처음 발견되는(가장 가까운 상위) 디렉터리의 것을 사용합니다.
+
+`{{변수}}`가 해석되지 않은 요청은 Enter로 보낼 수 없으며, 이유는 상태 줄에 표시됩니다. `e`로 고른 환경은 세션 동안 유지되어 이후 열리는 요청에도 적용됩니다(해당 환경이 없는 폴더에서는 첫 환경으로 열립니다).
 
 - `http-client.env.json` — 공개 환경 변수 (버전 관리 대상)
 - `http-client.private.env.json` — 비공개 환경 변수 (일반적으로 `.gitignore` 대상)

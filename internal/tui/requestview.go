@@ -124,6 +124,9 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
 	m.recompute()
+	if !m.canSend() {
+		return m, nil
+	}
 	m.executing = true
 	m.refreshContent()
 	m.scrollToResponse()
@@ -469,7 +472,7 @@ func (m requestModel) untruncatedEnvLine() string {
 		}
 		return mutedTextStyle.Render(text)
 	case m.envErr != nil:
-		return errorTextStyle.Render(strings.ReplaceAll(m.envErr.Error(), "\n", " "))
+		return errorTextStyle.Render(dirLabel(m.root, src.Dir) + strings.ReplaceAll(m.envErr.Error(), "\n", " "))
 	case src.Dir == "":
 		text := "no " + env.PublicFileName + " found"
 		if len(src.Searched) > 0 {

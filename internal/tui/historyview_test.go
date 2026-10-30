@@ -314,8 +314,12 @@ func TestHistoryView_ShowsEnvInListAndDetail(t *testing.T) {
 	if got := plainText(renderEntryDetail(e)); !strings.Contains(got, "env: dev") {
 		t.Errorf("detail = %q, want env: dev", got)
 	}
+	if got := (entryItem{entry: e}).Title(); !strings.Contains(got, "  [dev] GET ") {
+		t.Errorf("Title = %q, want two spaces before [dev] and one after", got)
+	}
 	e.Env = ""
-	if got := (entryItem{entry: e}).Title(); strings.Contains(got, "[") {
-		t.Errorf("Title = %q, want no env marker", got)
+	got := (entryItem{entry: e}).Title()
+	if strings.Contains(got, "[") || !strings.Contains(got, "  GET ") {
+		t.Errorf("Title = %q, want no env marker and two spaces before method", got)
 	}
 }

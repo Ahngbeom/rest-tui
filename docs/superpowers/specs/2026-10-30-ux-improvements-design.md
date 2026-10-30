@@ -93,7 +93,7 @@
 | P1 | Request view 고정 상태 줄 1행 | viewport 아래에 항상 1행을 예약한다. 복사 알림, 편집 오류, 전송 차단 안내(P2-6), 스크롤 %(P4-6)가 이 줄을 공유한다. 내용은 `requestModel.statusLine() string` 하나에서 만든다. |
 | P1 | `output.Sanitize(s string) string`, `output.IsBinary(body []byte, contentType string) bool` | P1-9 |
 | P2 | `env.LoadNearest(dir, root string) (env.Loaded, error)`, `type Loaded struct { Public, Private map[string]map[string]string; Dir string; Searched []string }` | `Dir`가 `""`이면 찾지 못한 것이다. |
-| P2 | `newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel`, `requestModel.currentEnv() string`, `requestModel.canSend() bool` | App은 `lastEnv string`을 들고 있다가 Request view의 Update가 끝날 때 `currentEnv()`가 빈 문자열이 아니면 갱신한다(env 파일이 없는 요청이 세션 env를 지우지 않도록). |
+| P2 | `newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel`, `requestModel.currentEnv() string`, `requestModel.canSend() bool` | App은 `lastEnv string`을 들고 있다가, Request view의 Update 전후로 `currentEnv()`가 바뀌었고 새 값이 빈 문자열이 아닐 때만 갱신한다(사용자가 실제로 고른 env만 세션 env가 된다). |
 | P2 | `history.Entry.Env string` (JSON 키 `Env`, `omitempty`) | |
 | P3 | `httpfile.Request.Unsupported []string` | 파서가 채우고, resolver는 그대로 보존한다. |
 | P3 | `env.ResolveRequest(req httpfile.Request, vars map[string]string, opts env.ResolveOptions) (httpfile.Request, []string)`, `type ResolveOptions struct { BaseDir string; Now time.Time; Rand *rand.Rand }` | 반환하는 `[]string`은 해결되지 않은 변수와 `missing file: …` 항목을 합친 목록이다. |
