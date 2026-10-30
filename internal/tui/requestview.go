@@ -341,16 +341,17 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		case key.Matches(msg, keys.Edit):
 			return m.startEditing()
 		case key.Matches(msg, keys.CycleEnv):
-			if m.edited && m.canCycleEnv() && !m.discardArmed {
+			if !m.canCycleEnv() {
+				return m, nil
+			}
+			if m.edited && !m.discardArmed {
 				m.discardArmed = true
 				return m, nil
 			}
-			if len(m.envNames) > 0 {
-				m.discardArmed = false
-				m.edited = false
-				m.envIndex = (m.envIndex + 1) % len(m.envNames)
-				m.recompute()
-			}
+			m.discardArmed = false
+			m.edited = false
+			m.envIndex = (m.envIndex + 1) % len(m.envNames)
+			m.recompute()
 			return m, nil
 		case key.Matches(msg, keys.Send):
 			if m.executing {

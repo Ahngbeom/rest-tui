@@ -874,3 +874,17 @@ func TestRequestModel_OtherKeyDisarmsEditDiscard(t *testing.T) {
 		t.Errorf("env = %q, want dev (prompt must re-arm after another key)", m.currentEnv())
 	}
 }
+
+func TestRequestModel_CycleEnvIsNoOpWithSingleEnvKeepsEdit(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"dev": {"host": "https://dev.example.com"}}`)
+	m := applyTestEdit(t, openAt(t, root, "a.http", ""), "GET https://edited.example.com/x\n")
+
+	m, _ = m.Update(typeRunes("e"))
+	if m.resolved.URL != "https://edited.example.com/x" || !m.edited {
+		t.Errorf("e with one env discarded edit: url=%q edited=%v", m.resolved.URL, m.edited)
+	}
+	if got := plainText(m.statusLine()); strings.Contains(got, "edits will be discarded") {
+		t.Errorf("prompt shown with a single env: %q", got)
+	}
+}
