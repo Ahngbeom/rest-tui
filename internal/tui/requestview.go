@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
@@ -24,7 +25,7 @@ import (
 	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
-const requestTimeout = 30 * time.Second
+const defaultRequestTimeout = 30 * time.Second
 
 // responseFromEntry reconstructs an *executor.Response from a stored history
 // entry so it can be rendered with output.RenderResponse.
@@ -78,7 +79,8 @@ type requestModel struct {
 	responseLineOffset int
 	width, height      int
 
-	store *history.Store
+	store   *history.Store
+	timeout time.Duration
 
 	now func() time.Time
 	rng *rand.Rand
@@ -113,36 +115,10 @@ func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Re
 	return m
 }
 
-// newRequestModelFromEntry builds a Request view pre-loaded with an
-// already-resolved past entry, and returns a command that re-sends it
-// immediately.
-func newRequestModelFromEntry(entry history.Entry, store *history.Store) (requestModel, tea.Cmd) {
-	req := httpfile.Request{
-		Name:    "(rerun) " + entry.Method + " " + entry.URL,
-		Method:  entry.Method,
-		URL:     entry.URL,
-		Headers: entry.RequestHeaders,
-		Body:    entry.RequestBody,
-	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
-	m.viewport = viewport.New(0, 0)
-	m.editor = textarea.New()
-	m.editor.ShowLineNumbers = false
-	m.editor.Prompt = ""
-	m.recompute()
-	if !m.canSend() {
-		return m, nil
-	}
-	m.executing = true
-	m.refreshContent()
-	m.scrollToResponse()
-	return m, m.sendCmd()
-}
-
 // newRequestModelFromEntryNoSend builds a Request view pre-loaded with an
-// already-resolved past entry, like newRequestModelFromEntry, but lands on
-// the screen without auto-sending. A history entry has no associated file
-// path, so no environment files are loaded (envIndex stays -1).
+// already-resolved past entry, landing on the screen without sending. A
+// history entry has no associated file path, so no environment files are
+// loaded (envIndex stays -1).
 func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) requestModel {
 	req := httpfile.Request{
 		Method:  entry.Method,
@@ -282,8 +258,37 @@ func (m requestModel) applyEdit() requestModel {
 
 func (m requestModel) isEditing() bool { return m.editing }
 
+func (m requestModel) withTimeout(d time.Duration) requestModel {
+	m.timeout = d
+	return m
+}
+
+func (m requestModel) sendTimeout() time.Duration {
+	if m.timeout <= 0 {
+		return defaultRequestTimeout
+	}
+	return m.timeout
+}
+
+func describeSendError(err error, timeout time.Duration) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("timed out after %s (use -timeout to change)", timeout)
+	}
+	return err.Error()
+}
+
+// startSend marks the model as executing, scrolls to the response area and
+// returns the command that performs the send. Callers check canSend first.
+func (m requestModel) startSend() (requestModel, tea.Cmd) {
+	m.executing = true
+	m.refreshContent()
+	m.scrollToResponse()
+	return m, m.sendCmd()
+}
+
 func (m requestModel) sendCmd() tea.Cmd {
 	resolved := m.resolved
+	timeout := m.sendTimeout()
 	store := m.store
 	id := m.id
 	envName := m.currentEnv()
@@ -291,7 +296,7 @@ func (m requestModel) sendCmd() tea.Cmd {
 		envName = m.entryEnv
 	}
 	return func() tea.Msg {
-		resp, err := executor.Execute(context.Background(), resolved, requestTimeout)
+		resp, err := executor.Execute(context.Background(), resolved, timeout)
 
 		entry := history.Entry{
 			Method:         resolved.Method,
@@ -301,7 +306,7 @@ func (m requestModel) sendCmd() tea.Cmd {
 			Env:            envName,
 		}
 		if err != nil {
-			entry.Error = err.Error()
+			entry.Error = describeSendError(err, timeout)
 		} else {
 			entry.StatusCode = resp.StatusCode
 			entry.Status = resp.Status
@@ -395,10 +400,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 				m.blockedFlash = true
 				return m, nil
 			}
-			m.executing = true
-			m.refreshContent()
-			m.scrollToResponse()
-			return m, m.sendCmd()
+			return m.startSend()
 		case key.Matches(msg, keys.Copy):
 			m.copyToken++
 			return m, copyToClipboardCmd(m.copyText(), m.copyToken)

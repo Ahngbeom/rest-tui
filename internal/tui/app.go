@@ -6,6 +6,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -46,18 +47,25 @@ type App struct {
 	dirStore *dirhistory.Store
 	root     string
 	lastEnv  string
+	opts     Options
 
 	showHelp     bool
 	helpViewport viewport.Model
 	statusMsg    string
 }
 
+// Options configures behavior that comes from the command line.
+type Options struct {
+	// Timeout bounds each request; zero means defaultRequestTimeout.
+	Timeout time.Duration
+}
+
 // NewApp builds the root model. root is the directory .http files are
 // discovered under; store is where executed requests are recorded; dirStore
 // is where directories passed via -dir are recorded, so they can be browsed
 // and switched to later from the Directory History screen.
-func NewApp(root string, store *history.Store, dirStore *dirhistory.Store) App {
-	a := App{root: root, store: store, dirStore: dirStore}
+func NewApp(root string, store *history.Store, dirStore *dirhistory.Store, opts Options) App {
+	a := App{root: root, store: store, dirStore: dirStore, opts: opts}
 	// Recording failures (e.g. an unwritable config dir) shouldn't stop the
 	// app from starting -- directory history is a convenience, not core
 	// functionality.
@@ -68,6 +76,14 @@ func NewApp(root string, store *history.Store, dirStore *dirhistory.Store) App {
 	a.dirHistory = newDirHistoryModel(dirStore)
 	a.helpViewport = viewport.New(0, 0)
 	a.helpViewport.SetContent(strings.Join(helpLines(), "\n"))
+	return a
+}
+
+// openRequestView makes m the active Request view, applying the app-wide
+// request timeout and the current content size.
+func (a App) openRequestView(m requestModel) App {
+	a.request = m.withTimeout(a.opts.Timeout).SetSize(a.width, a.contentHeight())
+	a.screen = screenRequest
 	return a
 }
 
@@ -153,23 +169,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case openRequestMsg:
-		a.request = newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
-		return a, nil
+		return a.openRequestView(newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv)), nil
 
 	case rerunMsg:
+		a = a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store))
+		if !a.request.canSend() {
+			return a, nil
+		}
 		var cmd tea.Cmd
-		a.request, cmd = newRequestModelFromEntry(msg.entry, a.store)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
+		a.request, cmd = a.request.startSend()
 		return a, cmd
 
 	case openRequestFromEntryMsg:
-		a.request = newRequestModelFromEntryNoSend(msg.entry, a.store)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
-		return a, nil
+		return a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store)), nil
 
 	case backToBrowserMsg:
 		a.screen = screenBrowser

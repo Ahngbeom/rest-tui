@@ -119,7 +119,7 @@ func newLayoutRequestApp(t *testing.T, w, h int) App {
 func newLayoutApp(t *testing.T, root string, store *history.Store, width, height int) App {
 	t.Helper()
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	return applyMsg(NewApp(root, store, dirStore), tea.WindowSizeMsg{Width: width, Height: height})
+	return applyMsg(NewApp(root, store, dirStore, Options{}), tea.WindowSizeMsg{Width: width, Height: height})
 }
 
 func pressKeys(a App, ks ...string) App {
@@ -195,7 +195,7 @@ func TestFitLines_UnsizedReturnsInput(t *testing.T) {
 }
 
 func TestApp_HeaderShownBeforeFirstWindowSize(t *testing.T) {
-	a := NewApp(t.TempDir(), newTestHistoryStore(t), dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json")))
+	a := NewApp(t.TempDir(), newTestHistoryStore(t), dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json")), Options{})
 	if first := ansi.Strip(strings.SplitN(a.View(), "\n", 2)[0]); !strings.Contains(first, "rest-tui") {
 		t.Errorf("header blank before first WindowSizeMsg; first line = %q", first)
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,7 +23,7 @@ func newTestApp(t *testing.T) App {
 	dir := t.TempDir()
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	a := NewApp(dir, store, dirStore)
+	a := NewApp(dir, store, dirStore, Options{})
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return model.(App)
 }
@@ -107,7 +108,7 @@ func TestApp_SurfacesHistoryCorruptionWarningAfterDetection(t *testing.T) {
 	}
 	store := history.NewStore(histPath)
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	a := NewApp(dir, store, dirStore)
+	a := NewApp(dir, store, dirStore, Options{})
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	a = model.(App)
 
@@ -207,7 +208,7 @@ func TestApp_BackToBrowserMsgRefreshesRecentListWhenNoFileSelected(t *testing.T)
 	dir := t.TempDir()
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	a := NewApp(dir, store, dirStore)
+	a := NewApp(dir, store, dirStore, Options{})
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	a = model.(App)
 
@@ -233,7 +234,7 @@ func TestApp_BackToBrowserMsgDoesNotClobberSelectedFileRequestList(t *testing.T)
 	}
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	a := NewApp(dir, store, dirStore)
+	a := NewApp(dir, store, dirStore, Options{})
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	a = model.(App)
 
@@ -264,7 +265,7 @@ func TestApp_NewAppTouchesDirHistoryOnStartup(t *testing.T) {
 	dir := t.TempDir()
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
-	NewApp(dir, store, dirStore)
+	NewApp(dir, store, dirStore, Options{})
 
 	entries, err := dirStore.List(0)
 	if err != nil {
@@ -316,7 +317,7 @@ func TestApp_SurfacesDirHistoryCorruptionWarning(t *testing.T) {
 	dirStore := dirhistory.NewStore(dirsPath)
 	// NewApp's startup Touch would otherwise overwrite this corrupted file,
 	// so corrupt it only after the app (and its startup Touch) already exist.
-	a := NewApp(dir, store, dirStore)
+	a := NewApp(dir, store, dirStore, Options{})
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	a = model.(App)
 
@@ -555,5 +556,52 @@ func TestApp_FooterHidesCycleEnvWhenEnvCannotChange(t *testing.T) {
 		if got := strings.Contains(footerLine(model.(App)), "cycle env"); got != tc.want {
 			t.Errorf("%s: footer has cycle env = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestApp_RerunMsgSendsWithAppTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	store := newTestHistoryStore(t)
+	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
+	a := applyMsg(NewApp(t.TempDir(), store, dirStore, Options{Timeout: 50 * time.Millisecond}), tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	model, cmd := a.Update(rerunMsg{entry: history.Entry{Method: "GET", URL: srv.URL}})
+	if got := model.(App); got.screen != screenRequest || !got.request.executing {
+		t.Fatalf("screen = %v, executing = %v, want screenRequest and executing", got.screen, got.request.executing)
+	}
+	msg := awaitMsg[execResultMsg](t, cmd)
+	if want := "timed out after 50ms (use -timeout to change)"; msg.entry.Error != want {
+		t.Errorf("entry.Error = %q, want %q", msg.entry.Error, want)
+	}
+}
+
+func TestApp_RerunMsgSendsImmediately(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"replayed":true}`))
+	}))
+	defer srv.Close()
+	a := newTestApp(t)
+
+	model, cmd := a.Update(rerunMsg{entry: history.Entry{Method: "GET", URL: srv.URL}})
+	got := model.(App)
+	if len(got.request.envNames) != 0 {
+		t.Errorf("envNames = %v, want empty for a rerun", got.request.envNames)
+	}
+	msg := awaitMsg[execResultMsg](t, cmd)
+	if msg.entry.StatusCode != http.StatusOK || msg.entry.ResponseBody != `{"replayed":true}` {
+		t.Errorf("entry = %d %q, want 200 {\"replayed\":true}", msg.entry.StatusCode, msg.entry.ResponseBody)
+	}
+	if msg.modelID != got.request.id {
+		t.Errorf("modelID = %d, want %d", msg.modelID, got.request.id)
+	}
+	if after := applyMsg(got, msg); after.request.lastEntry == nil || after.request.lastEntry.StatusCode != http.StatusOK {
+		t.Errorf("lastEntry = %+v, want StatusCode 200", after.request.lastEntry)
 	}
 }

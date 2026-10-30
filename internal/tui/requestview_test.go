@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -291,49 +293,6 @@ func TestRequestModel_LongResponseLineIsOneClickableHyperlink(t *testing.T) {
 	openIdx := strings.Index(view, open)
 	if openIdx == -1 || !strings.Contains(view[openIdx:], closeSeq) {
 		t.Errorf("OSC8 open marker for the response URL has no matching close after it; got:\n%s", view)
-	}
-}
-
-func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"replayed":true}`))
-	}))
-	defer srv.Close()
-
-	store := newTestHistoryStore(t)
-	entry := history.Entry{Method: "GET", URL: srv.URL}
-
-	m, cmd := newRequestModelFromEntry(entry, store)
-	if len(m.envNames) != 0 {
-		t.Errorf("envNames = %v, want empty for a rerun", m.envNames)
-	}
-	if !m.executing {
-		t.Error("expected executing=true immediately for a rerun")
-	}
-	if m.viewport.YOffset != m.responseLineOffset {
-		t.Errorf("YOffset = %d, want responseLineOffset %d", m.viewport.YOffset, m.responseLineOffset)
-	}
-	if cmd == nil {
-		t.Fatal("expected a send command")
-	}
-
-	msg, ok := cmd().(execResultMsg)
-	if !ok {
-		t.Fatalf("expected execResultMsg, got %T", cmd())
-	}
-	if msg.entry.StatusCode != http.StatusOK {
-		t.Errorf("StatusCode = %d, want 200", msg.entry.StatusCode)
-	}
-	if msg.entry.ResponseBody != `{"replayed":true}` {
-		t.Errorf("ResponseBody = %q", msg.entry.ResponseBody)
-	}
-	if msg.modelID != m.id {
-		t.Fatalf("msg.modelID = %d, want %d", msg.modelID, m.id)
-	}
-	m, _ = m.Update(msg)
-	if m.lastEntry == nil || m.lastEntry.StatusCode != http.StatusOK {
-		t.Errorf("rerun result not shown: lastEntry = %+v", m.lastEntry)
 	}
 }
 
@@ -759,8 +718,10 @@ func TestRequestModel_EnvLineParseErrorNamesAncestorFolder(t *testing.T) {
 	}
 }
 
-func TestNewRequestModelFromEntry_UnresolvedRerunIsNotSent(t *testing.T) {
-	m, cmd := newRequestModelFromEntry(history.Entry{Method: "GET", URL: "https://example.com/{{id}}"}, newTestHistoryStore(t))
+func TestApp_UnresolvedRerunMsgIsNotSent(t *testing.T) {
+	a := newTestApp(t)
+	model, cmd := a.Update(rerunMsg{entry: history.Entry{Method: "GET", URL: "https://example.com/{{id}}"}})
+	m := model.(App).request
 	if cmd != nil {
 		t.Error("cmd != nil, want no send for an unresolved entry")
 	}
@@ -769,6 +730,26 @@ func TestNewRequestModelFromEntry_UnresolvedRerunIsNotSent(t *testing.T) {
 	}
 	if got := plainText(m.SetSize(120, 30).statusLine()); !strings.Contains(got, "cannot send") {
 		t.Errorf("statusLine = %q, want cannot-send notice", got)
+	}
+}
+
+func TestDescribeSendError_Timeout(t *testing.T) {
+	err := fmt.Errorf("Get \"http://x\": %w", context.DeadlineExceeded)
+	if got, want := describeSendError(err, 30*time.Second), "timed out after 30s (use -timeout to change)"; got != want {
+		t.Errorf("describeSendError(timeout) = %q, want %q", got, want)
+	}
+	if got := describeSendError(errors.New("boom"), 30*time.Second); got != "boom" {
+		t.Errorf("describeSendError(boom) = %q, want boom", got)
+	}
+}
+
+func TestRequestModel_SendTimeoutDefaultsTo30s(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "http://x"})
+	if got := m.sendTimeout(); got != 30*time.Second {
+		t.Errorf("sendTimeout() = %v, want 30s", got)
+	}
+	if got := m.withTimeout(5 * time.Second).sendTimeout(); got != 5*time.Second {
+		t.Errorf("withTimeout(5s).sendTimeout() = %v, want 5s", got)
 	}
 }
 
@@ -937,7 +918,8 @@ func TestRequestModel_RerunRecordsOriginalEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 
-	_, cmd := newRequestModelFromEntry(history.Entry{Method: "GET", URL: srv.URL, Env: "staging"}, newTestHistoryStore(t))
+	m := newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: srv.URL, Env: "staging"}, newTestHistoryStore(t))
+	_, cmd := m.startSend()
 	if got := cmd().(execResultMsg).entry.Env; got != "staging" {
 		t.Errorf("entry.Env = %q, want staging", got)
 	}
@@ -964,7 +946,8 @@ func TestRequestModelFromEntry_EnvLineShowsSendTimeEnv(t *testing.T) {
 	if got, want := plainText(m.envLine()), "resolved at send time (env: dev)"; got != want {
 		t.Errorf("envLine = %q, want %q", got, want)
 	}
-	m, _ = newRequestModelFromEntry(history.Entry{Method: "GET", URL: "https://example.com"}, store)
+	m = newRequestModelFromEntryNoSend(history.Entry{Method: "GET", URL: "https://example.com"}, store)
+	m, _ = m.startSend()
 	if got, want := plainText(m.envLine()), "resolved at send time"; got != want {
 		t.Errorf("envLine = %q, want %q", got, want)
 	}
