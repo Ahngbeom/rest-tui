@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -33,7 +34,12 @@ func responseFromEntry(e history.Entry) *executor.Response {
 	}
 }
 
+var requestModelCounter atomic.Uint64
+
+func nextRequestModelID() uint64 { return requestModelCounter.Add(1) }
+
 type requestModel struct {
+	id       uint64
 	filePath string
 	file     *httpfile.File
 	req      httpfile.Request
@@ -68,7 +74,7 @@ type requestModel struct {
 // Browser, resolving {{var}} placeholders against the request's directory's
 // environment files (if any) plus the file's own @-scoped variables.
 func newRequestModel(filePath string, file *httpfile.File, req httpfile.Request, store *history.Store) requestModel {
-	m := requestModel{filePath: filePath, file: file, req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), filePath: filePath, file: file, req: req, store: store, envIndex: -1}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -100,7 +106,7 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -123,7 +129,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -253,6 +259,7 @@ func (m requestModel) isEditing() bool { return m.editing }
 func (m requestModel) sendCmd() tea.Cmd {
 	resolved := m.resolved
 	store := m.store
+	id := m.id
 	return func() tea.Msg {
 		resp, err := executor.Execute(context.Background(), resolved, requestTimeout)
 
@@ -279,13 +286,16 @@ func (m requestModel) sendCmd() tea.Cmd {
 			historyWarn = "could not save to history: " + storeErr.Error()
 		}
 
-		return execResultMsg{entry: entry, historyWarn: historyWarn}
+		return execResultMsg{modelID: id, entry: entry, historyWarn: historyWarn}
 	}
 }
 
 func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case execResultMsg:
+		if msg.modelID != m.id {
+			return m, nil
+		}
 		m.executing = false
 		entry := msg.entry
 		m.lastEntry = &entry

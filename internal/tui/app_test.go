@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,5 +333,30 @@ func TestApp_SurfacesDirHistoryCorruptionWarning(t *testing.T) {
 
 	if a.statusMsg == "" {
 		t.Fatal("expected statusMsg to surface the corruption warning once Directory History has loaded")
+	}
+}
+
+func applyMsg(a App, msg tea.Msg) App {
+	model, _ := a.Update(msg)
+	return model.(App)
+}
+
+func TestApp_StaleExecResultDoesNotLandOnNewRequestView(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("slow done")) }))
+	defer srv.Close()
+	a := newTestApp(t)
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: srv.URL + "/slow"}})
+	model, sendCmd := a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a = model.(App)
+	a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: srv.URL + "/users"}})
+
+	a = applyMsg(a, sendCmd())
+
+	if a.request.lastEntry != nil {
+		t.Errorf("listUsers view shows a response it never sent: %+v", a.request.lastEntry)
+	}
+	entries, err := a.store.List(10)
+	if err != nil || len(entries) != 1 || entries[0].URL != srv.URL+"/slow" {
+		t.Errorf("history = %+v, %v, want the /slow send recorded", entries, err)
 	}
 }

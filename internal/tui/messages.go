@@ -39,6 +39,7 @@ type openHistoryMsg struct{}
 // entry.Error rather than as a separate error, since a failed send is still a
 // history-worthy event.
 type execResultMsg struct {
+	modelID     uint64
 	entry       history.Entry
 	historyWarn string
 }

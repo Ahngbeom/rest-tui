@@ -102,7 +102,7 @@ func TestRequestModel_ExecResultMsgStopsExecutingAndSetsEntry(t *testing.T) {
 	m.executing = true
 
 	entry := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200}
-	m, cmd := m.Update(execResultMsg{entry: entry})
+	m, cmd := m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	if m.executing {
 		t.Error("executing should be false after execResultMsg")
@@ -148,7 +148,7 @@ func TestRequestModel_ExecResultMsgScrollsToResponseStart(t *testing.T) {
 	m.viewport.SetYOffset(1)
 
 	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: "line1\nline2\nline3\nline4\nline5"}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	if m.viewport.YOffset != m.responseLineOffset {
 		t.Errorf("YOffset = %d, want responseLineOffset %d", m.viewport.YOffset, m.responseLineOffset)
@@ -187,7 +187,7 @@ func TestRequestModel_SetSizePreservesScrollPosition(t *testing.T) {
 
 	body := strings.Repeat("line\n", 50)
 	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: body}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	m.viewport.SetYOffset(3)
 
@@ -213,7 +213,7 @@ func TestRequestModel_CycleEnvPreservesScrollPosition(t *testing.T) {
 
 	body := strings.Repeat("line\n", 50)
 	entry := history.Entry{Method: "GET", URL: "https://dev.example.com/ping", StatusCode: 200, ResponseBody: body}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	m.viewport.SetYOffset(3)
 
@@ -253,7 +253,7 @@ func TestRequestModel_LongResponseLineWrapsInsteadOfTruncating(t *testing.T) {
 	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
 	body := `{"url": "` + longURL + `"}`
 	entry := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, ResponseBody: body}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	view := ansiEscapePattern.ReplaceAllString(m.viewport.View(), "")
 	var joined strings.Builder
@@ -273,7 +273,7 @@ func TestRequestModel_LongResponseLineIsOneClickableHyperlink(t *testing.T) {
 	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
 	body := `{"url": "` + longURL + `"}`
 	entry := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, ResponseBody: body}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	view := m.viewport.View()
 	open := "\x1b]8;;" + longURL + "\x1b\\"
@@ -324,6 +324,13 @@ func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
 	if msg.entry.ResponseBody != `{"replayed":true}` {
 		t.Errorf("ResponseBody = %q", msg.entry.ResponseBody)
 	}
+	if msg.modelID != m.id {
+		t.Fatalf("msg.modelID = %d, want %d", msg.modelID, m.id)
+	}
+	m, _ = m.Update(msg)
+	if m.lastEntry == nil || m.lastEntry.StatusCode != http.StatusOK {
+		t.Errorf("rerun result not shown: lastEntry = %+v", m.lastEntry)
+	}
 }
 
 func TestRequestModel_CopyTextNotYetSent(t *testing.T) {
@@ -344,7 +351,7 @@ func TestRequestModel_CopyTextAfterExecResult(t *testing.T) {
 	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
 
 	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: `{"ok":true}`}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	got := m.copyText()
 	if !strings.Contains(got, "GET https://example.com") {
@@ -363,7 +370,7 @@ func TestRequestModel_CopyTextAfterError(t *testing.T) {
 	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
 
 	entry := history.Entry{Method: "GET", URL: req.URL, Error: "connection refused"}
-	m, _ = m.Update(execResultMsg{entry: entry})
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
 
 	got := m.copyText()
 	if !strings.Contains(got, "Error: connection refused") {
@@ -570,5 +577,18 @@ func TestRequestModel_BackspaceWhileEditingDeletesCharacterInsteadOfCancelling(t
 	}
 	if len(m.editor.Value()) != len(before)-1 {
 		t.Errorf("editor.Value() = %q (len %d), want len %d", m.editor.Value(), len(m.editor.Value()), len(before)-1)
+	}
+}
+
+func TestRequestModel_IgnoresExecResultFromAnotherModel(t *testing.T) {
+	store := newTestHistoryStore(t)
+	a := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://a.example"}, store)
+	b := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://b.example"}, store)
+	if a.id == 0 || a.id == b.id {
+		t.Fatalf("ids = %d, %d, want distinct non-zero", a.id, b.id)
+	}
+	b, cmd := b.Update(execResultMsg{modelID: a.id, entry: history.Entry{StatusCode: 200}})
+	if b.lastEntry != nil || cmd != nil {
+		t.Errorf("lastEntry = %+v, cmd = %v, want the foreign result ignored", b.lastEntry, cmd)
 	}
 }
