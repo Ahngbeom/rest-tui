@@ -1,6 +1,7 @@
 package httpfile
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -228,5 +229,67 @@ POST {{baseUrl}}/users
 	}
 	if f.Requests[0].Name != "Get user" || f.Requests[1].Name != "Create user" {
 		t.Errorf("requests = %+v", f.Requests)
+	}
+}
+
+func TestParse_MethodlessRequestLineDefaultsToGET(t *testing.T) {
+	cases := []struct{ src, wantURL string }{
+		{"{{host}}/users\n", "{{host}}/users"},
+		{"https://example.com/a HTTP/1.1\n", "https://example.com/a"},
+		{"localhost:8080/x\n", "localhost:8080/x"},
+		{"example.com/api\n", "example.com/api"},
+	}
+	for _, c := range cases {
+		f, err := Parse([]byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if got := f.Requests[0]; got.Method != "GET" || got.URL != c.wantURL {
+			t.Errorf("Parse(%q) = %s %s, want GET %s", c.src, got.Method, got.URL, c.wantURL)
+		}
+	}
+}
+
+func TestParse_NonURLRequestLineIsStillError(t *testing.T) {
+	for _, src := range []string{"hello\n", "Content-Type:application/json\n", "GET\n"} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("Parse(%q) err = nil, want a parse error", src)
+		}
+	}
+}
+
+func TestParse_IndentedQueryLinesAppendToURL(t *testing.T) {
+	src := "GET https://example.com/api\n    ?page=1\n\t&size=20\nAccept: application/json\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	req := f.Requests[0]
+	if req.URL != "https://example.com/api?page=1&size=20" {
+		t.Errorf("URL = %q", req.URL)
+	}
+	if len(req.Headers) != 1 || req.Headers[0].Name != "Accept" {
+		t.Errorf("Headers = %v", req.Headers)
+	}
+	if req.Line != 1 {
+		t.Errorf("Line = %d, want 1", req.Line)
+	}
+}
+
+func TestParse_UnindentedQueryLineIsStillHeaderError(t *testing.T) {
+	if _, err := Parse([]byte("GET https://example.com/api\n?page=1\n")); err == nil {
+		t.Fatal("expected parse error for an unindented ?-line")
+	}
+}
+
+func TestParse_HeaderSectionCommentsSkipped(t *testing.T) {
+	src := "GET https://example.com\nAccept: a\n# X-Debug: 1\n// X-Other: 2\nX-Real: 3\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []Header{{Name: "Accept", Value: "a"}, {Name: "X-Real", Value: "3"}}
+	if !reflect.DeepEqual(f.Requests[0].Headers, want) {
+		t.Errorf("Headers = %v, want %v", f.Requests[0].Headers, want)
 	}
 }

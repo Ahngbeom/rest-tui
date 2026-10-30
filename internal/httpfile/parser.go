@@ -1,6 +1,7 @@
 package httpfile
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -105,12 +106,28 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 		return nil
 	}
 
+	// Indented "?a=b" / "&c=d" continuation lines extend the URL.
+	for ; i < len(block); i++ {
+		raw := block[i]
+		if raw == "" || (raw[0] != ' ' && raw[0] != '\t') {
+			break
+		}
+		trimmed := strings.TrimSpace(raw)
+		if !strings.HasPrefix(trimmed, "?") && !strings.HasPrefix(trimmed, "&") {
+			break
+		}
+		req.URL += trimmed
+	}
+
 	// Headers: consume "Name: value" lines until a blank line or EOF.
 	for ; i < len(block); i++ {
 		trimmed := strings.TrimSpace(block[i])
 		if trimmed == "" {
 			i++
 			break
+		}
+		if _, ok := stripCommentPrefix(trimmed); ok {
+			continue
 		}
 		name, value, ok := parseHeaderLine(trimmed)
 		if !ok {
@@ -169,18 +186,35 @@ func parseVarDecl(line string) (name, value string, ok bool) {
 	return name, value, true
 }
 
-// parseRequestLine parses "METHOD URL [HTTP-VERSION]".
+// parseRequestLine parses "[METHOD] URL [HTTP-VERSION]". The method may be
+// omitted, in which case it defaults to GET.
 func parseRequestLine(line string) (method, url string, ok bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return "", "", false
+	if len(fields) >= 2 {
+		if m := strings.ToUpper(fields[0]); knownMethods[m] {
+			return m, fields[1], true
+		}
 	}
-	method = strings.ToUpper(fields[0])
-	if !knownMethods[method] {
-		return "", "", false
+	if len(fields) == 1 || (len(fields) == 2 && strings.HasPrefix(strings.ToUpper(fields[1]), "HTTP/")) {
+		if looksLikeURL(fields[0]) {
+			return "GET", fields[0], true
+		}
 	}
-	url = fields[1]
-	return method, url, true
+	return "", "", false
+}
+
+var (
+	schemeRe   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+	hostPathRe = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*(:[0-9]+)?([/?]\S*)?$`)
+)
+
+// looksLikeURL reports whether s is plausibly a request target rather than a
+// stray word or a "Name:value" header.
+func looksLikeURL(s string) bool {
+	if schemeRe.MatchString(s) || strings.HasPrefix(s, "{{") {
+		return true
+	}
+	return hostPathRe.MatchString(s) && strings.ContainsAny(s, ".:/")
 }
 
 // parseHeaderLine parses "Name: value".
