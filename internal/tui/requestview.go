@@ -212,7 +212,7 @@ func (m requestModel) SetSize(width, height int) requestModel {
 // request block ("METHOD URL\nHeader-Name: value\n...\n\n<body>"), used to
 // seed the raw-text edit buffer. It mirrors the request-rendering portion of
 // buildContent but produces plain text with no ANSI/lipgloss styling, since
-// this text is edited by hand and then reparsed by httpfile.Parse.
+// this text is edited by hand and then reparsed by httpfile.ParseVerbatimBody.
 func serializeRequest(req httpfile.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", req.Method, req.URL)
@@ -243,13 +243,15 @@ func (m requestModel) cancelEditing() requestModel {
 	return m
 }
 
-// applyEdit reparses the edit buffer via httpfile.Parse and, on success,
-// replaces m.resolved with the edited text, generating any {{$dynamic}}
-// variables in it. Other {{…}} placeholders stay literal and are collected
-// into m.missingVars so they block sending. On failure it stays in
-// edit mode with the buffer intact and sets m.editError.
+// applyEdit reparses the edit buffer via httpfile.ParseVerbatimBody and, on
+// success, replaces m.resolved with the edited text, generating any
+// {{$dynamic}} variables in it. The buffer was seeded from already-resolved
+// values, so `< path` lines are not included again and the original
+// Unsupported warnings carry over. Other {{…}} placeholders stay literal and
+// are collected into m.missingVars so they block sending. On failure it
+// stays in edit mode with the buffer intact and sets m.editError.
 func (m requestModel) applyEdit() requestModel {
-	f, err := httpfile.Parse([]byte(m.editor.Value()))
+	f, err := httpfile.ParseVerbatimBody([]byte(m.editor.Value()))
 	if err != nil {
 		m.editError = err.Error()
 		return m
@@ -265,9 +267,11 @@ func (m requestModel) applyEdit() requestModel {
 		URL:         parsed.URL,
 		Headers:     parsed.Headers,
 		Body:        parsed.Body,
-		Unsupported: parsed.Unsupported,
+		Unsupported: m.resolved.Unsupported,
 	}
-	m.resolved, m.missingVars = env.ResolveRequest(edited, nil, m.resolveOptions())
+	opts := m.resolveOptions()
+	opts.BaseDir = ""
+	m.resolved, m.missingVars = env.ResolveRequest(edited, nil, opts)
 	m.edited = true
 	m.editing = false
 	m.editError = ""
@@ -439,9 +443,9 @@ func (m requestModel) buildContent() (string, int) {
 		head.WriteString(warnTextStyle.Render(line))
 		head.WriteString("\n")
 	}
-	fmt.Fprintf(&head, "%s %s\n", m.resolved.Method, m.resolved.URL)
+	fmt.Fprintf(&head, "%s %s\n", output.Sanitize(m.resolved.Method), output.Sanitize(m.resolved.URL))
 	for _, h := range m.resolved.Headers {
-		fmt.Fprintf(&head, "%s: %s\n", h.Name, h.Value)
+		fmt.Fprintf(&head, "%s: %s\n", output.Sanitize(h.Name), output.Sanitize(h.Value))
 	}
 	if m.resolved.Body != "" {
 		head.WriteString("\n")

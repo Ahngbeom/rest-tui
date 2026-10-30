@@ -1194,3 +1194,68 @@ func TestUnsupportedLineAndBlockedMessageStripEscapes(t *testing.T) {
 		t.Errorf("blockedMessage() = %q", got)
 	}
 }
+
+func applyUnchangedEdit(t *testing.T, m requestModel) requestModel {
+	t.Helper()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.editing || m.editError != "" {
+		t.Fatalf("apply failed: editing = %v, editError = %q", m.editing, m.editError)
+	}
+	return m
+}
+
+func TestRequestModel_UnchangedEditKeepsIncludedBodyAndWarnings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inc.txt"), []byte("intro\n> quoted\ntail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./inc.txt",
+		Unsupported: []string{"response handler script"}}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+	before := m.resolved
+
+	m = applyUnchangedEdit(t, m)
+
+	if m.resolved.Body != before.Body {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, before.Body)
+	}
+	if !reflect.DeepEqual(m.resolved.Unsupported, before.Unsupported) {
+		t.Errorf("Unsupported = %v, want %v", m.resolved.Unsupported, before.Unsupported)
+	}
+	if !m.canSend() {
+		t.Errorf("canSend() = false, missingVars = %v", m.missingVars)
+	}
+}
+
+func TestRequestModel_UnchangedEditDoesNotReincludeNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inc.txt"), []byte("head\n< ./other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "other"), []byte("OTHER"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./inc.txt"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+
+	m = applyUnchangedEdit(t, m)
+
+	if want := "head\n< ./other"; m.resolved.Body != want {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, want)
+	}
+}
+
+func TestRequestModel_PreviewSanitizesRequestHead(t *testing.T) {
+	const osc = "\x1b]0;X\x07"
+	req := httpfile.Request{Method: "GET", URL: "https://example.com/" + osc,
+		Headers: []httpfile.Header{{Name: "X-A", Value: "v" + osc}}}
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
+
+	if content, _ := m.buildContent(); strings.Contains(content, "\x1b]") {
+		t.Errorf("preview contains OSC sequence: %q", content)
+	}
+	if !strings.Contains(m.resolved.URL, osc) || !strings.Contains(m.resolved.Headers[0].Value, osc) {
+		t.Error("resolved request must keep the bytes it sends")
+	}
+}

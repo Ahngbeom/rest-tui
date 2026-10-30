@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 func TestHistoryModel_RefreshPopulatesListMostRecentFirst(t *testing.T) {
@@ -321,5 +322,19 @@ func TestHistoryView_ShowsEnvInListAndDetail(t *testing.T) {
 	got := (entryItem{entry: e}).Title()
 	if strings.Contains(got, "[") || !strings.Contains(got, "  GET ") {
 		t.Errorf("Title = %q, want no env marker and two spaces before method", got)
+	}
+}
+
+func TestHistoryView_DetailSanitizesRequestHead(t *testing.T) {
+	const osc = "\x1b]0;X\x07"
+	e := history.Entry{
+		Method:         "POST",
+		URL:            "https://example.com/" + osc,
+		RequestHeaders: []httpfile.Header{{Name: "X-A", Value: "v" + osc}},
+		RequestBody:    "body" + osc,
+		StatusCode:     200,
+	}
+	if got := renderEntryDetail(e); strings.Contains(got, "\x1b]") {
+		t.Errorf("detail contains OSC sequence: %q", got)
 	}
 }

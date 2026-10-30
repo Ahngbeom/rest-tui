@@ -60,13 +60,13 @@ func renderEntryDetail(e history.Entry) string {
 		b.WriteString(mutedTextStyle.Render("env: " + e.Env))
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "%s %s\n", e.Method, e.URL)
+	fmt.Fprintf(&b, "%s %s\n", output.Sanitize(e.Method), output.Sanitize(e.URL))
 	for _, h := range e.RequestHeaders {
-		fmt.Fprintf(&b, "%s: %s\n", h.Name, h.Value)
+		fmt.Fprintf(&b, "%s: %s\n", output.Sanitize(h.Name), output.Sanitize(h.Value))
 	}
 	if e.RequestBody != "" {
 		b.WriteString("\n")
-		b.WriteString(output.PrettyBody([]byte(e.RequestBody), output.Options{Color: true}))
+		b.WriteString(output.PrettyBody([]byte(output.Sanitize(e.RequestBody)), output.Options{Color: true}))
 		b.WriteString("\n")
 	}
 
