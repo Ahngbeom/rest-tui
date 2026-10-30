@@ -860,3 +860,22 @@ func TestApp_OpenPathSwitchesAndRecords(t *testing.T) {
 		t.Errorf("dir history = %+v", entries)
 	}
 }
+
+func TestApp_PromptClosedAfterOpenPathSwitch(t *testing.T) {
+	proj := t.TempDir()
+	a := pressKeys(newTestApp(t), "o", proj)
+	model, cmd := a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a = applyMsg(model.(App), cmd())
+	a = pressKeys(a, "d")
+	if a.screen != screenDirHistory || a.dirHistory.isPrompting() {
+		t.Fatalf("screen=%v prompting=%v, want Directories without prompt", a.screen, a.dirHistory.isPrompting())
+	}
+	a = pressKeys(a, "h")
+	if a.screen != screenHistory {
+		t.Errorf("h did not jump to History: screen=%v", a.screen)
+	}
+	_, cmd = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Error("q should quit")
+	}
+}

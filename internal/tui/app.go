@@ -266,6 +266,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.applyStoreWarning(), nil
 
 	case switchDirMsg:
+		a.dirHistory = a.dirHistory.closePrompt()
 		a.root = msg.path
 		if isDir(msg.path) {
 			_, _ = a.dirStore.Touch(msg.path)

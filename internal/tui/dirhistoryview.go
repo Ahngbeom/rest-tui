@@ -5,16 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Ahngbeom/rest-tui/internal/output"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/Ahngbeom/rest-tui/internal/dirhistory"
+	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
 type dirEntryItem struct {
@@ -65,6 +64,7 @@ func (m dirHistoryModel) startPrompt() (dirHistoryModel, tea.Cmd) {
 
 func (m dirHistoryModel) closePrompt() dirHistoryModel {
 	m.prompt.Blur()
+	m.prompt.SetValue("")
 	m.promptErr = ""
 	return m.SetSize(m.width, m.height)
 }
@@ -115,6 +115,7 @@ func (m dirHistoryModel) submitPrompt() (dirHistoryModel, tea.Cmd) {
 // is called every time the Directory History screen is entered so it always
 // reflects the latest -dir runs and switches.
 func (m dirHistoryModel) refresh() dirHistoryModel {
+	m = m.closePrompt()
 	entries, err := m.store.List(50)
 	if err != nil {
 		m.loadErr = err
