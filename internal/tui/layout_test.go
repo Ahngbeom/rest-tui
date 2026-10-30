@@ -1,0 +1,133 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Ahngbeom/rest-tui/internal/dirhistory"
+	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
+)
+
+var layoutSizes = []struct{ w, h int }{{60, 20}, {80, 24}, {120, 35}, {200, 50}}
+
+type layoutScenario struct {
+	name  string
+	build func(t *testing.T, w, h int) App
+}
+
+var layoutScenarios = []layoutScenario{
+	{"browser-empty", func(t *testing.T, w, h int) App {
+		return newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), w, h)
+	}},
+	{"browser-long-root", func(t *testing.T, w, h int) App {
+		root := filepath.Join(t.TempDir(), strings.Repeat("long-directory-name-", 8))
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return newLayoutApp(t, root, newTestHistoryStore(t), w, h)
+	}},
+	{"store-warning", func(t *testing.T, w, h int) App {
+		histPath := filepath.Join(t.TempDir(), "history.json")
+		if err := os.WriteFile(histPath, []byte("{ not valid json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		a := pressKeys(newLayoutApp(t, t.TempDir(), history.NewStore(histPath), w, h), "h")
+		if a.statusMsg == "" {
+			t.Fatal("precondition: expected a store warning")
+		}
+		return a
+	}},
+}
+
+func newLayoutApp(t *testing.T, root string, store *history.Store, width, height int) App {
+	t.Helper()
+	dirStore := dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json"))
+	return applyMsg(NewApp(root, store, dirStore), tea.WindowSizeMsg{Width: width, Height: height})
+}
+
+func pressKeys(a App, ks ...string) App {
+	named := map[string]tea.KeyType{
+		"enter":  tea.KeyEnter,
+		"esc":    tea.KeyEsc,
+		"tab":    tea.KeyTab,
+		"up":     tea.KeyUp,
+		"down":   tea.KeyDown,
+		"ctrl+s": tea.KeyCtrlS,
+	}
+	for _, k := range ks {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		if kt, ok := named[k]; ok {
+			msg = tea.KeyMsg{Type: kt}
+		}
+		a = applyMsg(a, msg)
+	}
+	return a
+}
+
+func assertViewFits(t *testing.T, view string, width, height int) {
+	t.Helper()
+	if got := lipgloss.Height(view); got > height {
+		t.Errorf("view is %d lines tall, terminal is %d", got, height)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d is %d cells wide, terminal is %d: %q", i+1, w, width, ansi.Strip(line))
+		}
+	}
+}
+
+func TestApp_ViewFitsTerminal(t *testing.T) {
+	for _, sc := range layoutScenarios {
+		for _, sz := range layoutSizes {
+			t.Run(fmt.Sprintf("%s/%dx%d", sc.name, sz.w, sz.h), func(t *testing.T) {
+				view := sc.build(t, sz.w, sz.h).View()
+				assertViewFits(t, view, sz.w, sz.h)
+				if first := ansi.Strip(strings.SplitN(view, "\n", 2)[0]); !strings.Contains(first, "rest-tui") {
+					t.Errorf("header pushed off screen; first line = %q", first)
+				}
+			})
+		}
+	}
+}
+
+func TestApp_ViewDoesNotPanicOnTinyTerminal(t *testing.T) {
+	for _, sz := range []struct{ w, h int }{{0, 0}, {20, 5}} {
+		for _, keys := range [][]string{nil, {"h"}, {"d"}} {
+			a := pressKeys(newLayoutApp(t, t.TempDir(), newTestHistoryStore(t), sz.w, sz.h), keys...)
+			_ = a.View()
+			a = applyMsg(a, openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+			_ = a.View()
+		}
+	}
+}
+
+func TestFitLines_WrapsAndKeepsLeadingLines(t *testing.T) {
+	got := fitLines("abcdefgh\nij\nkl", 4, 3)
+	if want := "abcd\nefgh\nij"; got != want {
+		t.Errorf("fitLines = %q, want %q", got, want)
+	}
+}
+
+func TestFitLines_UnsizedReturnsInput(t *testing.T) {
+	s := "some error text"
+	for _, sz := range []struct{ w, h int }{{0, 5}, {5, 0}, {-1, -1}} {
+		if got := fitLines(s, sz.w, sz.h); got != s {
+			t.Errorf("fitLines(%d, %d) = %q, want input unchanged", sz.w, sz.h, got)
+		}
+	}
+}
+
+func TestApp_HeaderShownBeforeFirstWindowSize(t *testing.T) {
+	a := NewApp(t.TempDir(), newTestHistoryStore(t), dirhistory.NewStore(filepath.Join(t.TempDir(), "dirs.json")))
+	if first := ansi.Strip(strings.SplitN(a.View(), "\n", 2)[0]); !strings.Contains(first, "rest-tui") {
+		t.Errorf("header blank before first WindowSizeMsg; first line = %q", first)
+	}
+}

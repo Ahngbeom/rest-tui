@@ -80,10 +80,19 @@ func (a App) activeScreenIsEditing() bool {
 
 func (a App) contentHeight() int {
 	h := a.height - headerHeight - footerHeight
-	if h < 0 {
-		h = 0
+	if a.statusMsg != "" {
+		h--
 	}
-	return h
+	return max(0, h)
+}
+
+func (a App) resize() App {
+	ch := a.contentHeight()
+	a.browser = a.browser.SetSize(a.width, ch)
+	a.request = a.request.SetSize(a.width, ch)
+	a.history = a.history.SetSize(a.width, ch)
+	a.dirHistory = a.dirHistory.SetSize(a.width, ch)
+	return a
 }
 
 // applyStoreWarning copies any newly-detected history or directory-history
@@ -92,11 +101,15 @@ func (a App) contentHeight() int {
 // actually reads the file, so this is checked here rather than once at
 // startup.
 func (a App) applyStoreWarning() App {
+	prev := a.statusMsg
 	if w := a.store.Warning(); w != "" {
 		a.statusMsg = w
 	}
 	if w := a.dirStore.Warning(); w != "" {
 		a.statusMsg = w
+	}
+	if a.statusMsg != prev {
+		a = a.resize()
 	}
 	return a
 }
@@ -105,12 +118,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
-		ch := a.contentHeight()
-		a.browser = a.browser.SetSize(msg.Width, ch)
-		a.request = a.request.SetSize(msg.Width, ch)
-		a.history = a.history.SetSize(msg.Width, ch)
-		a.dirHistory = a.dirHistory.SetSize(msg.Width, ch)
-		return a, nil
+		return a.resize(), nil
 
 	case tea.KeyMsg:
 		if !a.activeScreenIsEditing() {
@@ -258,7 +266,7 @@ func (a App) helpView() string {
 }
 
 func (a App) View() string {
-	header := headerStyle.Render(a.breadcrumb())
+	header := headerStyle.Render(truncateLine(a.breadcrumb(), a.width-headerStyle.GetHorizontalPadding()))
 
 	var body string
 	switch {
@@ -276,7 +284,7 @@ func (a App) View() string {
 
 	footer := footerStyle.Render(renderHints(a.footerHints(), a.width-footerStyle.GetHorizontalPadding()))
 	if a.statusMsg != "" {
-		footer = statusStyle.Render(a.statusMsg) + "\n" + footer
+		footer = statusStyle.Render(truncateLine(a.statusMsg, a.width-statusStyle.GetHorizontalPadding())) + "\n" + footer
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
