@@ -42,12 +42,14 @@ func nextRequestModelID() uint64 { return requestModelCounter.Add(1) }
 type requestModel struct {
 	id       uint64
 	filePath string
+	root     string
 	file     *httpfile.File
 	req      httpfile.Request
 
-	envNames              []string
-	envIndex              int
-	publicEnv, privateEnv map[string]map[string]string
+	envNames  []string
+	envIndex  int
+	envSource env.Loaded
+	envErr    error
 
 	resolved    httpfile.Request
 	missingVars []string
@@ -72,20 +74,19 @@ type requestModel struct {
 }
 
 // newRequestModel builds a Request view for a request selected in the
-// Browser, resolving {{var}} placeholders against the request's directory's
-// environment files (if any) plus the file's own @-scoped variables.
-func newRequestModel(filePath string, file *httpfile.File, req httpfile.Request, store *history.Store) requestModel {
-	m := requestModel{id: nextRequestModelID(), filePath: filePath, file: file, req: req, store: store, envIndex: -1}
+// Browser, resolving {{var}} placeholders against the env files nearest the
+// request (searching up to root) plus the file's own @-scoped variables.
+func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel {
+	m := requestModel{id: nextRequestModelID(), filePath: filePath, root: root, file: file, req: req, store: store, envIndex: -1}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
 
 	if filePath != "" {
-		public, private, err := env.LoadFiles(filepath.Dir(filePath))
-		if err == nil {
-			m.publicEnv, m.privateEnv = public, private
-			m.envNames = env.EnvNames(public, private)
+		m.envSource, m.envErr = env.LoadNearest(filepath.Dir(filePath), root)
+		if m.envErr == nil {
+			m.envNames = env.EnvNames(m.envSource.Public, m.envSource.Private)
 			if len(m.envNames) > 0 {
 				m.envIndex = 0
 			}
@@ -148,7 +149,7 @@ func (m *requestModel) recompute() {
 	if m.envIndex >= 0 && m.envIndex < len(m.envNames) {
 		envName = m.envNames[m.envIndex]
 	}
-	vars := env.Merge(m.publicEnv, m.privateEnv, envName, fileVars)
+	vars := env.Merge(m.envSource.Public, m.envSource.Private, envName, fileVars)
 	m.resolved, m.missingVars = env.ResolveRequest(m.req, vars)
 	m.refreshContent()
 }
@@ -419,10 +420,52 @@ func (m requestModel) buildContent() (string, int) {
 }
 
 func (m requestModel) envLine() string {
-	if len(m.envNames) == 0 {
-		return mutedTextStyle.Render("no environment file found")
+	line := m.untruncatedEnvLine()
+	if m.viewport.Width > 0 {
+		line = ansi.Truncate(line, m.viewport.Width, "…")
 	}
-	return fmt.Sprintf("env: %s (%d/%d) — press e to cycle", m.envNames[m.envIndex], m.envIndex+1, len(m.envNames))
+	return line
+}
+
+func (m requestModel) untruncatedEnvLine() string {
+	src := m.envSource
+	switch {
+	case m.envErr != nil:
+		return errorTextStyle.Render(strings.ReplaceAll(m.envErr.Error(), "\n", " "))
+	case src.Dir == "":
+		text := "no " + env.PublicFileName + " found"
+		if len(src.Searched) > 0 {
+			labels := make([]string, len(src.Searched))
+			for i, dir := range src.Searched {
+				labels[i] = dirLabel(m.root, dir)
+			}
+			text += " (searched: " + strings.Join(labels, ", ") + ")"
+		}
+		return mutedTextStyle.Render(text)
+	}
+	file := dirLabel(m.root, src.Dir) + src.FileName()
+	if len(m.envNames) == 0 {
+		return "env: (none) · " + file
+	}
+	line := fmt.Sprintf("env: %s (%d/%d) · %s", m.envNames[m.envIndex], m.envIndex+1, len(m.envNames), file)
+	if m.canCycleEnv() {
+		line += " — e cycle"
+	}
+	return line
+}
+
+func (m requestModel) canCycleEnv() bool { return len(m.envNames) > 1 }
+
+func dirLabel(root, dir string) string {
+	if root != "" {
+		if rel, err := filepath.Rel(root, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel == "." {
+				return "./"
+			}
+			return filepath.ToSlash(rel) + "/"
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(dir)) + "/"
 }
 
 func (m requestModel) title() string {

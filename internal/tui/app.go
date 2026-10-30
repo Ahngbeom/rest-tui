@@ -62,7 +62,7 @@ func NewApp(root string, store *history.Store, dirStore *dirhistory.Store) App {
 	// functionality.
 	_, _ = dirStore.Touch(root)
 	a.browser = newBrowserModel(root, store)
-	a.request = newRequestModel("", &httpfile.File{}, httpfile.Request{}, store)
+	a.request = newRequestModel("", "", &httpfile.File{}, httpfile.Request{}, store, "")
 	a.history = newHistoryModel(store)
 	a.dirHistory = newDirHistoryModel(dirStore)
 	a.helpViewport = viewport.New(0, 0)
@@ -152,7 +152,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case openRequestMsg:
-		a.request = newRequestModel(msg.filePath, msg.file, msg.req, a.store)
+		a.request = newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, "")
 		a.request = a.request.SetSize(a.width, a.contentHeight())
 		a.screen = screenRequest
 		return a, nil

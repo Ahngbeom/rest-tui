@@ -438,3 +438,28 @@ func TestApp_HelpResizesWhileOpen(t *testing.T) {
 		t.Errorf("helpViewport.YOffset = %d, want 1 after resize + j", a.helpViewport.YOffset)
 	}
 }
+
+func TestApp_OpenRequestSearchesEnvUpToAppRoot(t *testing.T) {
+	a := newTestApp(t)
+	writeNestedFile(t, filepath.Join(a.root, "http-client.env.json"), threeEnvs)
+
+	model, _ := a.Update(openRequestMsg{filePath: filepath.Join(a.root, "api", "users.http"), file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "{{host}}/x"}})
+	a = model.(App)
+
+	if a.request.resolved.URL != "https://dev.example.com/x" {
+		t.Errorf("resolved.URL = %q", a.request.resolved.URL)
+	}
+}
+
+func TestApp_EnvLineFitsTerminalWithDeepEnvPath(t *testing.T) {
+	a := newTestApp(t)
+	deep := filepath.Join(a.root, "services", "payments", "internal", "api", "v1")
+	writeNestedFile(t, filepath.Join(deep, "http-client.env.json"), `{"staging-eu-west": {}, "dev": {}, "qa": {}}`)
+	model, _ := a.Update(openRequestMsg{filePath: filepath.Join(deep, "a.http"), file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+	a = model.(App)
+
+	for _, sz := range [][2]int{{60, 20}, {80, 24}, {120, 35}} {
+		model, _ = a.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
+		assertViewFits(t, model.(App).View(), sz[0], sz[1])
+	}
+}

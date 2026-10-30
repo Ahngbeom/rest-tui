@@ -34,7 +34,7 @@ func TestNewRequestModel_ResolvesFileScopedVars(t *testing.T) {
 	file := &httpfile.File{Vars: map[string]string{"baseUrl": "https://example.com"}}
 	req := httpfile.Request{Method: "GET", URL: "{{baseUrl}}/users/1"}
 
-	m := newRequestModel(filepath.Join(dir, "a.http"), file, req, newTestHistoryStore(t))
+	m := newRequestModel(filepath.Join(dir, "a.http"), "", file, req, newTestHistoryStore(t), "")
 
 	if m.resolved.URL != "https://example.com/users/1" {
 		t.Errorf("resolved.URL = %q", m.resolved.URL)
@@ -51,7 +51,7 @@ func TestNewRequestModel_MissingVarsBlockSend(t *testing.T) {
 	dir := t.TempDir()
 	req := httpfile.Request{Method: "GET", URL: "{{baseUrl}}/users/1"}
 
-	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel(filepath.Join(dir, "a.http"), "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	if len(m.missingVars) == 0 {
 		t.Fatal("expected missingVars to be non-empty")
 	}
@@ -76,7 +76,7 @@ func TestRequestModel_CycleEnvRecomputesResolvedVars(t *testing.T) {
 	}
 	req := httpfile.Request{Method: "GET", URL: "{{baseUrl}}/ping"}
 
-	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel(filepath.Join(dir, "a.http"), "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	if len(m.envNames) != 2 || m.envIndex != 0 {
 		t.Fatalf("envNames = %v, envIndex = %d", m.envNames, m.envIndex)
 	}
@@ -100,7 +100,7 @@ func TestRequestModel_CycleEnvRecomputesResolvedVars(t *testing.T) {
 }
 
 func TestRequestModel_ExecResultMsgStopsExecutingAndSetsEntry(t *testing.T) {
-	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "")
 	m.executing = true
 
 	entry := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200}
@@ -118,7 +118,7 @@ func TestRequestModel_ExecResultMsgStopsExecutingAndSetsEntry(t *testing.T) {
 }
 
 func TestRequestModel_BackEmitsBackToBrowserMsg(t *testing.T) {
-	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "")
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
@@ -139,7 +139,7 @@ func TestRequestModel_ExecResultMsgScrollsToResponseStart(t *testing.T) {
 			{Name: "X-Trace-Id", Value: "abc123"},
 		},
 	}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	if m.responseLineOffset == 0 {
 		t.Fatal("expected responseLineOffset to be past the request header lines")
@@ -166,7 +166,7 @@ func TestRequestModel_SendScrollsToResponseStartImmediately(t *testing.T) {
 			{Name: "Authorization", Value: "Bearer token"},
 		},
 	}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	// Pretend a prior response was showing and the user had scrolled into it.
 	m.viewport.SetYOffset(1)
@@ -185,7 +185,7 @@ func TestRequestModel_SendScrollsToResponseStartImmediately(t *testing.T) {
 
 func TestRequestModel_SetSizePreservesScrollPosition(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com/users/1"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	body := strings.Repeat("line\n", 50)
 	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: body}
@@ -211,7 +211,7 @@ func TestRequestModel_CycleEnvPreservesScrollPosition(t *testing.T) {
 	}
 	req := httpfile.Request{Method: "GET", URL: "{{baseUrl}}/ping"}
 
-	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel(filepath.Join(dir, "a.http"), "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	body := strings.Repeat("line\n", 50)
 	entry := history.Entry{Method: "GET", URL: "https://dev.example.com/ping", StatusCode: 200, ResponseBody: body}
@@ -228,7 +228,7 @@ func TestRequestModel_CycleEnvPreservesScrollPosition(t *testing.T) {
 
 func TestRequestModel_BuildContentResponseOffsetPointsPastDivider(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	content, offset := m.buildContent()
 	lines := strings.Split(content, "\n")
@@ -249,7 +249,7 @@ func TestRequestModel_BuildContentResponseOffsetPointsPastDivider(t *testing.T) 
 
 func TestRequestModel_LongResponseLineWrapsInsteadOfTruncating(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	m = m.SetSize(60, 20) // innerWidth = 56
 
 	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
@@ -269,7 +269,7 @@ func TestRequestModel_LongResponseLineWrapsInsteadOfTruncating(t *testing.T) {
 
 func TestRequestModel_LongResponseLineIsOneClickableHyperlink(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	m = m.SetSize(60, 20) // innerWidth = 56
 
 	longURL := "https://example.com/very/long/path/that/goes/on/and/on/and/should/be/wider/than/the/viewport"
@@ -337,7 +337,7 @@ func TestNewRequestModelFromEntry_SkipsEnvUIAndSendsImmediately(t *testing.T) {
 
 func TestRequestModel_CopyTextNotYetSent(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	got := m.copyText()
 	if !strings.Contains(got, "not yet sent") {
@@ -350,7 +350,7 @@ func TestRequestModel_CopyTextNotYetSent(t *testing.T) {
 
 func TestRequestModel_CopyTextAfterExecResult(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	entry := history.Entry{Method: "GET", URL: req.URL, StatusCode: 200, ResponseBody: `{"ok":true}`}
 	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
@@ -369,7 +369,7 @@ func TestRequestModel_CopyTextAfterExecResult(t *testing.T) {
 
 func TestRequestModel_CopyTextAfterError(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	entry := history.Entry{Method: "GET", URL: req.URL, Error: "connection refused"}
 	m, _ = m.Update(execResultMsg{modelID: m.id, entry: entry})
@@ -382,7 +382,7 @@ func TestRequestModel_CopyTextAfterError(t *testing.T) {
 
 func TestRequestModel_CopyKeyReturnsCommandWithoutInvokingIt(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if cmd == nil {
@@ -396,7 +396,7 @@ func TestRequestModel_CopyKeyReturnsCommandWithoutInvokingIt(t *testing.T) {
 
 func TestRequestModel_ClipboardCopyMsgSetsStatus(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	m.copyToken = 1
 
 	m, cmd := m.Update(clipboardCopyMsg{token: 1, err: nil})
@@ -415,7 +415,7 @@ func TestRequestModel_ClipboardCopyMsgSetsStatus(t *testing.T) {
 
 func TestRequestModel_ClipboardCopyMsgIgnoresStaleToken(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	m.copyToken = 2
 
 	m, _ = m.Update(clipboardCopyMsg{token: 1, err: nil})
@@ -426,7 +426,7 @@ func TestRequestModel_ClipboardCopyMsgIgnoresStaleToken(t *testing.T) {
 
 func TestRequestModel_ClipboardCopyExpiredMsgClearsStatus(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	m.copyToken = 1
 	m.copyStatus = "copied to clipboard"
 
@@ -448,7 +448,7 @@ func TestRequestModel_EditKeySeedsEditorWithSerializedResolved(t *testing.T) {
 		Headers: []httpfile.Header{{Name: "Content-Type", Value: "application/json"}},
 		Body:    `{"name":"Ahn"}`,
 	}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 
@@ -467,7 +467,7 @@ func TestRequestModel_EditKeySeedsEditorWithSerializedResolved(t *testing.T) {
 func TestRequestModel_ApplyEditValidUpdatesResolvedAndClearsMissingVars(t *testing.T) {
 	dir := t.TempDir()
 	req := httpfile.Request{Method: "GET", URL: "{{missing}}/old"}
-	m := newRequestModel(filepath.Join(dir, "a.http"), &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel(filepath.Join(dir, "a.http"), "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	if len(m.missingVars) == 0 {
 		t.Fatal("precondition failed: expected missingVars to be non-empty")
 	}
@@ -493,7 +493,7 @@ func TestRequestModel_ApplyEditValidUpdatesResolvedAndClearsMissingVars(t *testi
 
 func TestRequestModel_ApplyEditParseErrorStaysInEditModeWithMessage(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	origResolved := m.resolved
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
@@ -525,7 +525,7 @@ func TestRequestModel_ApplyEditWrongRequestCountStaysInEditModeWithMessage(t *te
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-			m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+			m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 			m.editor.SetValue(tc.text)
@@ -544,7 +544,7 @@ func TestRequestModel_ApplyEditWrongRequestCountStaysInEditModeWithMessage(t *te
 
 func TestRequestModel_EscCancelsEditWithoutMutatingResolved(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 	origResolved := m.resolved
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
@@ -567,7 +567,7 @@ func TestRequestModel_EscCancelsEditWithoutMutatingResolved(t *testing.T) {
 
 func TestRequestModel_BackspaceWhileEditingDeletesCharacterInsteadOfCancelling(t *testing.T) {
 	req := httpfile.Request{Method: "GET", URL: "https://example.com"}
-	m := newRequestModel("", &httpfile.File{}, req, newTestHistoryStore(t))
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "")
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	before := m.editor.Value()
@@ -584,8 +584,8 @@ func TestRequestModel_BackspaceWhileEditingDeletesCharacterInsteadOfCancelling(t
 
 func TestRequestModel_IgnoresExecResultFromAnotherModel(t *testing.T) {
 	store := newTestHistoryStore(t)
-	a := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://a.example"}, store)
-	b := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://b.example"}, store)
+	a := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://a.example"}, store, "")
+	b := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://b.example"}, store, "")
 	if a.id == 0 || a.id == b.id {
 		t.Fatalf("ids = %d, %d, want distinct non-zero", a.id, b.id)
 	}
@@ -596,7 +596,7 @@ func TestRequestModel_IgnoresExecResultFromAnotherModel(t *testing.T) {
 }
 
 func TestRequestModel_ViewportWidthMatchesPaneInnerWidth(t *testing.T) {
-	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(60, 20)
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "").SetSize(60, 20)
 	if want := 60 - paneFocusedStyle.GetHorizontalFrameSize(); m.viewport.Width != want {
 		t.Errorf("viewport.Width = %d, want %d", m.viewport.Width, want)
 	}
@@ -613,7 +613,7 @@ func TestRequestModel_ViewportWidthMatchesPaneInnerWidth(t *testing.T) {
 }
 
 func TestRequestModel_StatusRowIsReservedForCopyAndEditError(t *testing.T) {
-	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(80, 24)
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "").SetSize(80, 24)
 	if h := lipgloss.Height(m.View()); h != 24 {
 		t.Fatalf("idle height = %d, want 24", h)
 	}
@@ -630,11 +630,118 @@ func TestRequestModel_StatusRowIsReservedForCopyAndEditError(t *testing.T) {
 }
 
 func TestRequestModel_TabIndentedBodyEndStaysReachable(t *testing.T) {
-	m := newRequestModel("", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t)).SetSize(60, 20)
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "").SetSize(60, 20)
 	body := strings.Repeat("\t\t\t<p>"+strings.Repeat("word ", 9)+"</p>\n", 30) + "\t\tTHE-END"
 	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{StatusCode: 200, Status: "200 OK", ResponseBody: body}})
 	m.viewport.GotoBottom()
 	if v := ansi.Strip(m.View()); !strings.Contains(v, "THE-END") {
 		t.Errorf("last body line unreachable after scrolling to the bottom:\n%s", v)
+	}
+}
+
+func writeNestedFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func typeRunes(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+
+func plainText(s string) string { return ansiEscapePattern.ReplaceAllString(s, "") }
+
+const threeEnvs = `{"dev": {"host": "https://dev.example.com"}, "prod": {"host": "https://prod.example.com"}, "staging": {"host": "https://staging.example.com"}}`
+
+func openAt(t *testing.T, root, rel, preferred string) requestModel {
+	t.Helper()
+	req := httpfile.Request{Method: "GET", URL: "{{host}}/x"}
+	return newRequestModel(filepath.Join(root, rel), root, &httpfile.File{}, req, newTestHistoryStore(t), preferred).SetSize(120, 30)
+}
+
+func TestDirLabel(t *testing.T) {
+	cases := []struct{ root, dir, want string }{
+		{"/r", "/r", "./"},
+		{"/r/", "/r", "./"},
+		{"/r", "/r/api/v1", "api/v1/"},
+		{".", "api", "api/"},
+		{"./", ".", "./"},
+		{"", "/x", "/x/"},
+		{"/r", "/other", "/other/"},
+	}
+	for _, c := range cases {
+		if got := dirLabel(c.root, c.dir); got != c.want {
+			t.Errorf("dirLabel(%q, %q) = %q, want %q", c.root, c.dir, got, c.want)
+		}
+	}
+}
+
+func TestRequestModel_EnvLineFromAncestorFolder(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+
+	m := openAt(t, root, "api/users.http", "")
+
+	if m.resolved.URL != "https://dev.example.com/x" {
+		t.Errorf("resolved.URL = %q", m.resolved.URL)
+	}
+	if got, want := plainText(m.envLine()), "env: dev (1/3) · ./http-client.env.json — e cycle"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_EnvLineShowsNearestFileRelativeToRoot(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "api", "http-client.env.json"), threeEnvs)
+
+	m := openAt(t, root, "api/users.http", "")
+	if got, want := plainText(m.envLine()), "env: dev (1/3) · api/http-client.env.json — e cycle"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_EnvLineSingleEnvHasNoCycleHint(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"dev": {}}`)
+
+	m := openAt(t, root, "a.http", "")
+	if got, want := plainText(m.envLine()), "env: dev (1/1) · ./http-client.env.json"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+	if m.canCycleEnv() {
+		t.Error("canCycleEnv() = true with a single env")
+	}
+}
+
+func TestRequestModel_EnvLineSharedOnly(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"$shared": {"host": "https://shared.example.com"}}`)
+
+	m := openAt(t, root, "a.http", "")
+	if m.resolved.URL != "https://shared.example.com/x" {
+		t.Errorf("resolved.URL = %q", m.resolved.URL)
+	}
+	if got, want := plainText(m.envLine()), "env: (none) · ./http-client.env.json"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_EnvLineListsSearchedFoldersWhenNotFound(t *testing.T) {
+	root := t.TempDir()
+	m := openAt(t, root, "api/users.http", "")
+	if got, want := plainText(m.envLine()), "no http-client.env.json found (searched: api/, ./)"; got != want {
+		t.Errorf("envLine = %q, want %q", got, want)
+	}
+}
+
+func TestRequestModel_EnvLineShowsParseError(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{ broken`)
+
+	m := openAt(t, root, "a.http", "")
+	if got := plainText(m.envLine()); !strings.HasPrefix(got, "http-client.env.json: ") {
+		t.Errorf("envLine = %q, want prefix %q", got, "http-client.env.json: ")
 	}
 }

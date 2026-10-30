@@ -91,7 +91,7 @@ rest-tui -dir <path-to-http-files>
 
 ## Environment configuration
 
-`.http` 파일이 있는 디렉터리에 IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다.
+`.http` 파일이 있는 디렉터리부터 `-dir` 루트까지 위로 올라가며 가장 가까운 디렉터리의 IntelliJ HTTP Client와 동일한 환경 파일을 두면 `{{var}}` 플레이스홀더가 자동으로 치환됩니다.
 
 - `http-client.env.json` — 공개 환경 변수 (버전 관리 대상)
 - `http-client.private.env.json` — 비공개 환경 변수 (일반적으로 `.gitignore` 대상)
