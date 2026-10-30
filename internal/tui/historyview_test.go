@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
@@ -336,5 +337,101 @@ func TestHistoryView_DetailSanitizesRequestHead(t *testing.T) {
 	}
 	if got := renderEntryDetail(e); strings.Contains(got, "\x1b]") {
 		t.Errorf("detail contains OSC sequence: %q", got)
+	}
+}
+
+func TestIsSafeMethod(t *testing.T) {
+	for _, m := range []string{"GET", "head", "OPTIONS"} {
+		if !isSafeMethod(m) {
+			t.Errorf("isSafeMethod(%q) = false, want true", m)
+		}
+	}
+	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		if isSafeMethod(m) {
+			t.Errorf("isSafeMethod(%q) = true, want false", m)
+		}
+	}
+}
+
+func newPostHistoryModel(t *testing.T) historyModel {
+	t.Helper()
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "POST", URL: "https://example.com/users"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	return newHistoryModel(store).refresh().SetSize(120, 20)
+}
+
+func TestHistoryModel_RerunUnsafeMethodAsksConfirmation(t *testing.T) {
+	m := newPostHistoryModel(t)
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd != nil {
+		t.Fatal("expected no command before confirmation")
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "rerun POST https://example.com/users? (y/n)") {
+		t.Errorf("view lacks confirmation prompt:\n%s", ansi.Strip(m.View()))
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected rerunMsg after y")
+	}
+	msg, ok := cmd().(rerunMsg)
+	if !ok || msg.entry.URL != "https://example.com/users" {
+		t.Errorf("cmd() = %#v, want rerunMsg for the POST entry", cmd())
+	}
+}
+
+func TestHistoryModel_RerunConfirmationOtherKeyCancels(t *testing.T) {
+	m := newPostHistoryModel(t)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+
+	if cmd != nil || m.pendingRerun != nil {
+		t.Errorf("cmd = %v, pendingRerun = %v, want both nil", cmd, m.pendingRerun)
+	}
+	if strings.Contains(ansi.Strip(m.View()), "(y/n)") {
+		t.Error("view still shows the confirmation prompt")
+	}
+}
+
+func TestHistoryModel_RerunSafeMethodSkipsConfirmation(t *testing.T) {
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(120, 20)
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if m.pendingRerun != nil || cmd == nil {
+		t.Fatalf("pendingRerun = %v, cmd nil = %v, want immediate rerun", m.pendingRerun, cmd == nil)
+	}
+	if _, ok := cmd().(rerunMsg); !ok {
+		t.Errorf("cmd() = %T, want rerunMsg", cmd())
+	}
+}
+
+func TestHistoryModel_RefreshKeepsCursorOnSameEntry(t *testing.T) {
+	store := newTestHistoryStore(t)
+	a, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/a"})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/b"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newHistoryModel(store).refresh().SetSize(120, 20)
+	m.list.Select(1)
+	if got := m.list.SelectedItem().(entryItem).entry.ID; got != a.ID {
+		t.Fatalf("precondition: selected %q, want %q", got, a.ID)
+	}
+
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/c"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m = m.refresh()
+
+	if got := m.list.SelectedItem().(entryItem).entry.ID; got != a.ID {
+		t.Errorf("selected ID = %q, want %q", got, a.ID)
 	}
 }

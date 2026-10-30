@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/executor"
@@ -109,8 +110,9 @@ type historyModel struct {
 	detail viewport.Model
 	mode   historyMode
 
-	selected *history.Entry
-	loadErr  error
+	selected     *history.Entry
+	pendingRerun *history.Entry
+	loadErr      error
 
 	copyStatus string
 	copyErr    bool
@@ -131,6 +133,11 @@ func newHistoryModel(store *history.Store) historyModel {
 // refresh reloads the most recent entries from the store. It is called every
 // time the History screen is entered so it always reflects the latest runs.
 func (m historyModel) refresh() historyModel {
+	m.pendingRerun = nil
+	var keepID string
+	if item, ok := m.list.SelectedItem().(entryItem); ok {
+		keepID = item.entry.ID
+	}
 	entries, err := m.store.List(50)
 	if err != nil {
 		m.loadErr = err
@@ -142,16 +149,53 @@ func (m historyModel) refresh() historyModel {
 		items[i] = entryItem{entry: e}
 	}
 	m.list.SetItems(items)
+	for i, it := range items {
+		if keepID != "" && it.(entryItem).entry.ID == keepID {
+			m.list.Select(i)
+			break
+		}
+	}
 	m.mode = historyModeList
+	return m.layout()
+}
+
+func isSafeMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD", "OPTIONS":
+		return true
+	}
+	return false
+}
+
+// layout sizes the list and detail viewport, reserving one row for the rerun
+// confirmation prompt while one is pending.
+func (m historyModel) layout() historyModel {
+	innerWidth := max(0, m.width-paneFocusedStyle.GetHorizontalFrameSize())
+	innerHeight := max(0, m.height-paneFocusedStyle.GetVerticalFrameSize())
+	prompt := 0
+	if m.pendingRerun != nil {
+		prompt = 1
+	}
+	m.list.SetSize(innerWidth, max(0, innerHeight-prompt))
+	m.detail.Width, m.detail.Height = innerWidth, max(0, innerHeight-1-prompt) // one row: copy status
 	return m
+}
+
+func (m historyModel) rerunPrompt() string {
+	e := m.pendingRerun
+	w := max(0, m.width-paneFocusedStyle.GetHorizontalFrameSize())
+	method := output.Sanitize(e.Method)
+	url := output.Sanitize(e.URL)
+	if room := w - lipgloss.Width("rerun "+method+" ") - len("? (y/n)"); lipgloss.Width(url) > room {
+		url = ansi.Truncate(url, max(0, room), "…")
+	}
+	return warnTextStyle.Render(fmt.Sprintf("rerun %s %s? (y/n)", method, url))
 }
 
 func (m historyModel) SetSize(width, height int) historyModel {
 	m.width, m.height = width, height
-	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
-	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize())
-	m.list.SetSize(innerWidth, innerHeight)
-	m.detail.Width, m.detail.Height = innerWidth, max(0, innerHeight-1) // last row: copy status
+	m = m.layout()
+	innerWidth := m.detail.Width
 	if m.mode == historyModeDetail && m.selected != nil {
 		m.detail.SetContent(wrapToWidth(renderEntryDetail(*m.selected), innerWidth))
 	}
@@ -177,6 +221,15 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.pendingRerun != nil {
+			entry := *m.pendingRerun
+			m.pendingRerun = nil
+			m = m.layout()
+			if key.Matches(msg, keys.Confirm) {
+				return m, func() tea.Msg { return rerunMsg{entry: entry} }
+			}
+			return m, nil
+		}
 		switch {
 		case key.Matches(msg, keys.Back):
 			if m.mode == historyModeDetail {
@@ -205,6 +258,10 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 					return m, nil
 				}
 				entry = item.entry
+			}
+			if !isSafeMethod(entry.Method) {
+				m.pendingRerun = &entry
+				return m.layout(), nil
 			}
 			return m, func() tea.Msg { return rerunMsg{entry: entry} }
 		case key.Matches(msg, keys.Copy):
@@ -241,7 +298,14 @@ func (m historyModel) View() string {
 			}
 			status = style.Render(ansi.Truncate(m.copyStatus, m.detail.Width, "…"))
 		}
-		return pane.Render(m.detail.View() + "\n" + status)
+		out := m.detail.View() + "\n" + status
+		if m.pendingRerun != nil {
+			out += "\n" + m.rerunPrompt()
+		}
+		return pane.Render(out)
+	}
+	if m.pendingRerun != nil {
+		return pane.Render(m.list.View() + "\n" + m.rerunPrompt())
 	}
 	return pane.Render(m.list.View())
 }

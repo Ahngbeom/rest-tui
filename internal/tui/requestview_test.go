@@ -122,15 +122,15 @@ func TestRequestModel_ExecResultMsgStopsExecutingAndSetsEntry(t *testing.T) {
 	}
 }
 
-func TestRequestModel_BackEmitsBackToBrowserMsg(t *testing.T) {
+func TestRequestModel_BackEmitsBackFromRequestMsg(t *testing.T) {
 	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "")
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
-		t.Fatal("expected a command emitting backToBrowserMsg")
+		t.Fatal("expected a command emitting backFromRequestMsg")
 	}
-	if _, ok := cmd().(backToBrowserMsg); !ok {
-		t.Fatalf("expected backToBrowserMsg, got %T", cmd())
+	if _, ok := cmd().(backFromRequestMsg); !ok {
+		t.Fatalf("expected backFromRequestMsg, got %T", cmd())
 	}
 }
 
@@ -521,8 +521,8 @@ func TestRequestModel_EscCancelsEditWithoutMutatingResolved(t *testing.T) {
 		t.Errorf("resolved = %+v, want unchanged %+v", m.resolved, origResolved)
 	}
 	if cmd != nil {
-		if _, ok := cmd().(backToBrowserMsg); ok {
-			t.Fatal("esc while editing should not emit backToBrowserMsg")
+		if _, ok := cmd().(backFromRequestMsg); ok {
+			t.Fatal("esc while editing should not emit backFromRequestMsg")
 		}
 	}
 }

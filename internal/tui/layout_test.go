@@ -102,6 +102,18 @@ var layoutScenarios = []layoutScenario{
 		a := pressKeys(newLayoutHistoryApp(t, w, h), "h", "enter")
 		return applyMsg(a, clipboardCopyMsg{token: a.history.copyToken})
 	}},
+	{"history-rerun-confirm", func(t *testing.T, w, h int) App {
+		store := newTestHistoryStore(t)
+		if _, err := store.Append(history.Entry{Method: "POST", URL: "https://example.com/" + strings.Repeat("p", 292), StatusCode: 200}); err != nil {
+			t.Fatal(err)
+		}
+		a := newLayoutApp(t, t.TempDir(), store, w, h)
+		a = pressKeys(a, "h", "r")
+		if a.history.pendingRerun == nil {
+			t.Fatal("precondition: expected a pending rerun confirmation")
+		}
+		return a
+	}},
 	{"dir-history", func(t *testing.T, w, h int) App {
 		return pressKeys(newLayoutHistoryApp(t, w, h), "d")
 	}},

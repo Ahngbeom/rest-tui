@@ -31,6 +31,10 @@ type openRequestFromEntryMsg struct {
 // backToBrowserMsg asks the app to return to the Browser screen.
 type backToBrowserMsg struct{}
 
+// backFromRequestMsg asks the app to leave the Request view and return to the
+// screen it was opened from.
+type backFromRequestMsg struct{}
+
 // openHistoryMsg asks the app to switch to the History screen.
 type openHistoryMsg struct{}
 

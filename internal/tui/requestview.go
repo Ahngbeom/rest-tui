@@ -443,7 +443,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 				}
 				return m, nil
 			}
-			return m, func() tea.Msg { return backToBrowserMsg{} }
+			return m, func() tea.Msg { return backFromRequestMsg{} }
 		}
 	}
 

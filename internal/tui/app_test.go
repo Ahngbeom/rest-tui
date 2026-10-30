@@ -721,3 +721,38 @@ func TestApp_EditorInputDisarmsQuit(t *testing.T) {
 		t.Error("q typed into the editor should disarm quit")
 	}
 }
+
+func TestApp_EscFromRerunReturnsToHistory(t *testing.T) {
+	a := newTestApp(t)
+	model, _ := a.Update(rerunMsg{entry: history.Entry{Method: "GET", URL: "http://127.0.0.1:1/x"}})
+	a = model.(App)
+	if got, want := a.breadcrumb(), "rest-tui › History › rerun"; got != want {
+		t.Fatalf("breadcrumb = %q, want %q", got, want)
+	}
+	model, _ = a.Update(execResultMsg{modelID: a.request.id, entry: history.Entry{Error: "refused"}})
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected esc to emit a command")
+	}
+	model, _ = model.Update(cmd())
+	got := model.(App)
+	if got.screen != screenHistory {
+		t.Errorf("screen = %v, want screenHistory", got.screen)
+	}
+	if want := "rest-tui › History"; got.breadcrumb() != want {
+		t.Errorf("breadcrumb = %q, want %q", got.breadcrumb(), want)
+	}
+}
+
+func TestApp_EscFromBrowserOpenedRequestReturnsToBrowser(t *testing.T) {
+	a := newTestApp(t)
+	model, _ := a.Update(openRequestMsg{file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected esc to emit a command")
+	}
+	model, _ = model.Update(cmd())
+	if got := model.(App); got.screen != screenBrowser {
+		t.Errorf("screen = %v, want screenBrowser", got.screen)
+	}
+}

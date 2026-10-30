@@ -41,10 +41,11 @@ type App struct {
 	screen        screen
 	width, height int
 
-	browser    browserModel
-	request    requestModel
-	history    historyModel
-	dirHistory dirHistoryModel
+	browser       browserModel
+	request       requestModel
+	requestOrigin screen
+	history       historyModel
+	dirHistory    dirHistoryModel
 
 	store    *history.Store
 	dirStore *dirhistory.Store
@@ -85,7 +86,8 @@ func NewApp(root string, store *history.Store, dirStore *dirhistory.Store, opts 
 
 // openRequestView makes m the active Request view, applying the app-wide
 // request timeout and the current content size.
-func (a App) openRequestView(m requestModel) App {
+func (a App) openRequestView(m requestModel, origin screen) App {
+	a.requestOrigin = origin
 	a.request = m.withTimeout(a.opts.Timeout).SetSize(a.width, a.contentHeight())
 	a.screen = screenRequest
 	return a
@@ -187,10 +189,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.applyStoreWarning(), cmd
 
 	case openRequestMsg:
-		return a.openRequestView(newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv)), nil
+		return a.openRequestView(newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv), screenBrowser), nil
 
 	case rerunMsg:
-		a = a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store))
+		a = a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store), screenHistory)
 		if !a.request.canSend() {
 			return a, nil
 		}
@@ -199,7 +201,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, cmd
 
 	case openRequestFromEntryMsg:
-		return a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store)), nil
+		return a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store), screenBrowser), nil
+
+	case backFromRequestMsg:
+		if a.requestOrigin == screenHistory {
+			a.screen = screenHistory
+			a.history = a.history.refresh()
+			return a.applyStoreWarning(), nil
+		}
+		a.screen = screenBrowser
+		if a.browser.parsedFile == nil {
+			a.browser = a.browser.refreshRecent()
+		}
+		return a, nil
 
 	case backToBrowserMsg:
 		a.screen = screenBrowser
@@ -275,6 +289,9 @@ func (a App) disarmQuit() App {
 func (a App) breadcrumb() string {
 	switch a.screen {
 	case screenRequest:
+		if a.requestOrigin == screenHistory {
+			return "rest-tui › History › rerun"
+		}
 		return "rest-tui › Browser › " + a.request.title()
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
@@ -312,6 +329,9 @@ func (a App) footerHints() []hint {
 		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"g/G", "top/bottom"}, hint{"c", "copy"}, hint{"i", "edit"}, esc, hint{"h", "history"}, hint{"d", "dirs"})
 		return append(hints, tail...)
 	case screenHistory:
+		if a.history.pendingRerun != nil {
+			return append([]hint{{"y", "rerun"}, {"n", "cancel"}}, tail...)
+		}
 		if a.history.mode == historyModeDetail {
 			return append([]hint{{"↑/↓", "scroll"}, {"r", "rerun"}, {"c", "copy"}, {"esc", "back"}}, tail...)
 		}
@@ -347,12 +367,12 @@ func helpLines() []string {
 		"  g/G, home/end top / bottom of response",
 		"  c, y          copy request/response",
 		"  i             edit request (method/URL/headers/body)",
-		"  esc           cancel send (while sending) / back",
+		"  esc           cancel send (while sending) / back to Browser or History",
 		"  ctrl+s, esc   apply / cancel edit (while editing)",
 		"",
 		"History",
 		"  enter         view detail",
-		"  r             rerun",
+		"  r             rerun (asks y/n unless GET/HEAD/OPTIONS)",
 		"  c, y          copy request/response (detail view)",
 		"",
 		"Directory History",
