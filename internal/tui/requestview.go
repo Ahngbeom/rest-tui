@@ -53,8 +53,9 @@ type requestModel struct {
 	envSource env.Loaded
 	envErr    error
 
-	resolved    httpfile.Request
-	missingVars []string
+	resolved     httpfile.Request
+	missingVars  []string
+	blockedFlash bool
 
 	editing   bool
 	editor    textarea.Model
@@ -222,9 +223,9 @@ func (m requestModel) cancelEditing() requestModel {
 }
 
 // applyEdit reparses the edit buffer via httpfile.Parse and, on success,
-// replaces m.resolved and clears m.missingVars (the edited values are final,
-// not template placeholders needing resolution). On failure it stays in edit
-// mode with the buffer intact and sets m.editError.
+// replaces m.resolved with the edited text verbatim and recollects any
+// {{…}} placeholders left in it into m.missingVars. On failure it stays in
+// edit mode with the buffer intact and sets m.editError.
 func (m requestModel) applyEdit() requestModel {
 	f, err := httpfile.Parse([]byte(m.editor.Value()))
 	if err != nil {
@@ -243,7 +244,7 @@ func (m requestModel) applyEdit() requestModel {
 		Headers: parsed.Headers,
 		Body:    parsed.Body,
 	}
-	m.missingVars = nil
+	_, m.missingVars = env.ResolveRequest(m.resolved, nil)
 	m.editing = false
 	m.editError = ""
 	m.editor.Blur()
@@ -317,6 +318,7 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		m.blockedFlash = false
 		if m.editing {
 			switch {
 			case key.Matches(msg, keys.CancelEdit):
@@ -339,7 +341,11 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			}
 			return m, nil
 		case key.Matches(msg, keys.Send):
-			if m.executing || len(m.missingVars) > 0 {
+			if m.executing {
+				return m, nil
+			}
+			if !m.canSend() {
+				m.blockedFlash = true
 				return m, nil
 			}
 			m.executing = true
@@ -390,11 +396,6 @@ func (m requestModel) buildContent() (string, int) {
 		head.WriteString(output.PrettyBody([]byte(m.resolved.Body), output.Options{Color: true}))
 		head.WriteString("\n")
 	}
-	if len(m.missingVars) > 0 {
-		head.WriteString("\n")
-		head.WriteString(errorTextStyle.Render("unresolved variables: " + strings.Join(m.missingVars, ", ")))
-		head.WriteString("\n")
-	}
 
 	head.WriteString("\n")
 	head.WriteString(mutedTextStyle.Render(strings.Repeat("─", 40)))
@@ -408,6 +409,8 @@ func (m requestModel) buildContent() (string, int) {
 	switch {
 	case m.executing:
 		tail.WriteString("Sending request...")
+	case m.lastEntry == nil && !m.canSend():
+		tail.WriteString(mutedTextStyle.Render("(not yet sent)"))
 	case m.lastEntry == nil:
 		tail.WriteString(mutedTextStyle.Render("(not yet sent — press enter to send)"))
 	case m.lastEntry.Error != "":
@@ -495,13 +498,31 @@ func (m requestModel) title() string {
 	return m.req.Method + " " + m.req.URL
 }
 
-func (m requestModel) statusLine() string {
-	text, style := m.copyStatus, copiedTextStyle
-	if m.copyErr {
-		style = errorTextStyle
+func (m requestModel) canSend() bool { return len(m.missingVars) == 0 }
+
+func (m requestModel) blockedMessage() string {
+	names := make([]string, len(m.missingVars))
+	for i, name := range m.missingVars {
+		names[i] = "{{" + name + "}}"
 	}
-	if m.editing {
+	return "cannot send: unresolved " + strings.Join(names, ", ") + " — e switch env · i edit"
+}
+
+func (m requestModel) statusLine() string {
+	var text string
+	var style lipgloss.Style
+	switch {
+	case m.editing:
 		text, style = m.editError, errorTextStyle
+	case m.blockedFlash:
+		text, style = m.blockedMessage(), blockedHighlightStyle
+	case m.copyStatus != "":
+		text, style = m.copyStatus, copiedTextStyle
+		if m.copyErr {
+			style = errorTextStyle
+		}
+	case !m.canSend():
+		text, style = m.blockedMessage(), errorTextStyle
 	}
 	if text == "" {
 		return ""

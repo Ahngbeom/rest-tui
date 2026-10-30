@@ -249,7 +249,12 @@ func (a App) footerHints() []hint {
 		if a.request.isEditing() {
 			return []hint{{"ctrl+s", "apply"}, {"esc", "cancel"}}
 		}
-		return append([]hint{{"e", "cycle env"}, {"enter/ctrl+r", "send"}, {"↑/↓", "scroll"}, {"c", "copy"}, {"i", "edit"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
+		hints := []hint{{"e", "cycle env"}}
+		if a.request.canSend() {
+			hints = append(hints, hint{"enter/ctrl+r", "send"})
+		}
+		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"c", "copy"}, hint{"i", "edit"}, hint{"esc", "back"}, hint{"h", "history"}, hint{"d", "dirs"})
+		return append(hints, tail...)
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
 			return append([]hint{{"↑/↓", "scroll"}, {"r", "rerun"}, {"c", "copy"}, {"esc", "back"}}, tail...)

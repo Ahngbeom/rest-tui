@@ -68,6 +68,8 @@ var (
 	errorTextStyle  = lipgloss.NewStyle().Foreground(colorError)
 	mutedTextStyle  = lipgloss.NewStyle().Foreground(colorFaintText)
 	copiedTextStyle = lipgloss.NewStyle().Foreground(colorSuccess)
+
+	blockedHighlightStyle = errorTextStyle.Bold(true).Reverse(true)
 )
 
 // wrapToWidth word-wraps s to width columns (ANSI-color-code aware) and

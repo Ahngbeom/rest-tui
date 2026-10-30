@@ -494,3 +494,23 @@ func TestApp_SelectedEnvCarriesToNextRequest(t *testing.T) {
 		t.Errorf("env in folder without prod = %q, want dev", got)
 	}
 }
+
+func footerLine(a App) string {
+	lines := strings.Split(a.View(), "\n")
+	return plainText(lines[len(lines)-1])
+}
+
+func TestApp_FooterHidesSendWhenBlocked(t *testing.T) {
+	a := newTestApp(t)
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	model, _ = model.(App).Update(openRequestMsg{filePath: filepath.Join(a.root, "a.http"), file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "{{host}}/x"}})
+	a = model.(App)
+
+	if got := footerLine(a); strings.Contains(got, "send") {
+		t.Errorf("footer = %q, want no send hint", got)
+	}
+	for _, sz := range [][2]int{{60, 20}, {80, 24}, {120, 35}} {
+		model, _ = a.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
+		assertViewFits(t, model.(App).View(), sz[0], sz[1])
+	}
+}

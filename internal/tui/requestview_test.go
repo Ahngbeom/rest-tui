@@ -768,3 +768,74 @@ func TestRequestModel_ProdEnvUsesWarningStyle(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestModel_UnresolvedVarsBlockSendWithGuidance(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "{{host}}/x", Headers: []httpfile.Header{{Name: "Authorization", Value: "Bearer {{token}}"}}}
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "").SetSize(200, 30)
+	want := "cannot send: unresolved {{host}}, {{token}} — e switch env · i edit"
+
+	if m.canSend() {
+		t.Fatal("canSend() = true with unresolved vars")
+	}
+	if got := plainText(m.statusLine()); !strings.Contains(got, want) {
+		t.Errorf("statusLine = %q, want it to contain %q", got, want)
+	}
+	if content, _ := m.buildContent(); strings.Contains(content, "press enter to send") || strings.Contains(content, "unresolved variables:") {
+		t.Errorf("content still invites sending or repeats the notice: %q", plainText(content))
+	}
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.executing || !m.blockedFlash {
+		t.Fatalf("after enter: cmd=%v executing=%v blockedFlash=%v", cmd != nil, m.executing, m.blockedFlash)
+	}
+	if got := plainText(m.statusLine()); !strings.Contains(got, want) {
+		t.Errorf("statusLine after enter = %q", got)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.blockedFlash {
+		t.Error("blockedFlash should clear on the next key")
+	}
+}
+
+func TestRequestModel_CanSendAfterSwitchingToCompleteEnv(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"a": {}, "b": {"host": "https://b.example.com"}}`)
+	m := openAt(t, root, "x.http", "")
+	if m.canSend() {
+		t.Fatal("env a lacks host; canSend() should be false")
+	}
+	m, _ = m.Update(typeRunes("e"))
+	if !m.canSend() {
+		t.Error("env b defines host; canSend() should be true")
+	}
+}
+
+func applyTestEdit(t *testing.T, m requestModel, text string) requestModel {
+	t.Helper()
+	m, _ = m.Update(typeRunes("i"))
+	m.editor.SetValue(text)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.editing {
+		t.Fatalf("edit not applied: %s", m.editError)
+	}
+	return m
+}
+
+func TestRequestModel_ApplyEditKeepsLeftoverPlaceholdersBlocked(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "{{host}}/x"}
+	m := newRequestModel("", "", &httpfile.File{}, req, newTestHistoryStore(t), "").SetSize(200, 30)
+
+	m = applyTestEdit(t, m, "GET https://ok.example.com/x\nAuthorization: Bearer {{token}}\n")
+	if m.canSend() {
+		t.Fatal("canSend() = true; the edit still contains {{token}}")
+	}
+	if got := plainText(m.statusLine()); !strings.Contains(got, "cannot send: unresolved {{token}} — e switch env · i edit") {
+		t.Errorf("statusLine = %q", got)
+	}
+
+	m = applyTestEdit(t, m, "GET https://ok.example.com/x\nAuthorization: Bearer abc\n")
+	if !m.canSend() {
+		t.Errorf("canSend() = false after removing every placeholder; missingVars = %v", m.missingVars)
+	}
+}
