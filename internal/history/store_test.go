@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -230,5 +231,23 @@ func TestStore_WarningIsSafeForConcurrentAccess(t *testing.T) {
 
 	if s.Warning() == "" {
 		t.Error("expected a non-empty recovery warning after concurrent access")
+	}
+}
+
+func TestStore_EnvRoundTripsAndIsOmittedWhenEmpty(t *testing.T) {
+	s, path := newTestStore(t)
+	if _, err := s.Append(Entry{Method: "GET", URL: "https://example.com"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), `"Env"`) {
+		t.Errorf("empty Env should be omitted: %s", data)
+	}
+	if _, err := s.Append(Entry{Method: "GET", URL: "https://example.com", Env: "dev"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, _ := s.List(1)
+	if got[0].Env != "dev" {
+		t.Errorf("Env = %q, want dev", got[0].Env)
 	}
 }

@@ -888,3 +888,46 @@ func TestRequestModel_CycleEnvIsNoOpWithSingleEnvKeepsEdit(t *testing.T) {
 		t.Errorf("prompt shown with a single env: %q", got)
 	}
 }
+
+func TestRequestModel_SendRecordsEnvInHistory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"dev": {"host": "`+srv.URL+`"}}`)
+	store := newTestHistoryStore(t)
+	m := newRequestModel(filepath.Join(root, "a.http"), root, &httpfile.File{}, httpfile.Request{Method: "GET", URL: "{{host}}/x"}, store, "")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	msg := cmd().(execResultMsg)
+	if msg.entry.Env != "dev" {
+		t.Errorf("entry.Env = %q, want dev", msg.entry.Env)
+	}
+	if got, _ := store.List(1); got[0].Env != "dev" {
+		t.Errorf("stored Env = %q, want dev", got[0].Env)
+	}
+}
+
+func TestRequestModel_RerunRecordsOriginalEnv(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	_, cmd := newRequestModelFromEntry(history.Entry{Method: "GET", URL: srv.URL, Env: "staging"}, newTestHistoryStore(t))
+	if got := cmd().(execResultMsg).entry.Env; got != "staging" {
+		t.Errorf("entry.Env = %q, want staging", got)
+	}
+}
+
+func TestRequestModel_SentWithEnvShownAfterSwitch(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+	m := openAt(t, root, "a.http", "")
+	m, _ = m.Update(execResultMsg{modelID: m.id, entry: history.Entry{Env: "dev", StatusCode: 200, Status: "200 OK"}})
+
+	if content, _ := m.buildContent(); strings.Contains(content, "sent with env") {
+		t.Errorf("note shown before switching env: %q", plainText(content))
+	}
+	m, _ = m.Update(typeRunes("e"))
+	if content, _ := m.buildContent(); !strings.Contains(plainText(content), "(sent with env: dev)") {
+		t.Errorf("content = %q, want (sent with env: dev)", plainText(content))
+	}
+}

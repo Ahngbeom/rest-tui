@@ -35,7 +35,11 @@ func (e entryItem) Title() string {
 	if e.entry.Error != "" {
 		status = "ERR"
 	}
-	return fmt.Sprintf("%s  %s %s -> %s", e.entry.Timestamp.Format("15:04:05"), e.entry.Method, e.entry.URL, status)
+	stamp := e.entry.Timestamp.Format("15:04:05")
+	if e.entry.Env != "" {
+		stamp += "  [" + e.entry.Env + "]"
+	}
+	return fmt.Sprintf("%s %s %s -> %s", stamp, e.entry.Method, e.entry.URL, status)
 }
 
 func (e entryItem) Description() string {
@@ -50,6 +54,10 @@ func (e entryItem) Description() string {
 func renderEntryDetail(e history.Entry) string {
 	var b strings.Builder
 
+	if e.Env != "" {
+		b.WriteString(mutedTextStyle.Render("env: " + e.Env))
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "%s %s\n", e.Method, e.URL)
 	for _, h := range e.RequestHeaders {
 		fmt.Fprintf(&b, "%s: %s\n", h.Name, h.Value)

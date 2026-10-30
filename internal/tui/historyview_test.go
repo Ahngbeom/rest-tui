@@ -305,3 +305,17 @@ func TestHistoryModel_DetailCopyStatusKeepsHeight(t *testing.T) {
 		t.Errorf("after copy: height = %d", lipgloss.Height(v))
 	}
 }
+
+func TestHistoryView_ShowsEnvInListAndDetail(t *testing.T) {
+	e := history.Entry{Method: "GET", URL: "https://example.com", StatusCode: 200, Env: "dev"}
+	if got := (entryItem{entry: e}).Title(); !strings.Contains(got, "[dev]") {
+		t.Errorf("Title = %q, want [dev]", got)
+	}
+	if got := plainText(renderEntryDetail(e)); !strings.Contains(got, "env: dev") {
+		t.Errorf("detail = %q, want env: dev", got)
+	}
+	e.Env = ""
+	if got := (entryItem{entry: e}).Title(); strings.Contains(got, "[") {
+		t.Errorf("Title = %q, want no env marker", got)
+	}
+}

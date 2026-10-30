@@ -65,6 +65,7 @@ type requestModel struct {
 
 	executing   bool
 	lastEntry   *history.Entry
+	entryEnv    string
 	historyWarn string
 
 	copyStatus string
@@ -116,7 +117,7 @@ func newRequestModelFromEntry(entry history.Entry, store *history.Store) (reques
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -139,7 +140,7 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
 	}
-	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env}
 	m.viewport = viewport.New(0, 0)
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
@@ -261,6 +262,10 @@ func (m requestModel) sendCmd() tea.Cmd {
 	resolved := m.resolved
 	store := m.store
 	id := m.id
+	envName := m.currentEnv()
+	if envName == "" {
+		envName = m.entryEnv
+	}
 	return func() tea.Msg {
 		resp, err := executor.Execute(context.Background(), resolved, requestTimeout)
 
@@ -269,6 +274,7 @@ func (m requestModel) sendCmd() tea.Cmd {
 			URL:            resolved.URL,
 			RequestHeaders: resolved.Headers,
 			RequestBody:    resolved.Body,
+			Env:            envName,
 		}
 		if err != nil {
 			entry.Error = err.Error()
@@ -429,6 +435,10 @@ func (m requestModel) buildContent() (string, int) {
 	case m.lastEntry.Error != "":
 		tail.WriteString(errorTextStyle.Render("Error: " + m.lastEntry.Error))
 	default:
+		if cur := m.currentEnv(); cur != "" && m.lastEntry.Env != cur {
+			tail.WriteString(mutedTextStyle.Render("(sent with env: " + m.lastEntry.Env + ")"))
+			tail.WriteString("\n")
+		}
 		tail.WriteString(output.RenderResponse(responseFromEntry(*m.lastEntry), output.Options{Color: true}))
 	}
 

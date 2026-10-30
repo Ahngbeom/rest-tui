@@ -29,6 +29,8 @@ type Entry struct {
 	// Error holds the execution failure message, if the request could not
 	// be completed (network error, timeout, etc).
 	Error string
+	// Env is the env name the request was sent with; empty when none was selected.
+	Env string `json:"Env,omitempty"`
 }
 
 // Store reads and appends Entry records to a JSON file on disk.
