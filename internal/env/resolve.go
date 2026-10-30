@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -15,6 +16,17 @@ import (
 // MissingFilePrefix marks entries in ResolveRequest's missing list that are
 // unreadable `< path` body includes rather than variable names.
 const MissingFilePrefix = "missing file: "
+
+var schemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// EnsureScheme prefixes http:// to a URL that has no scheme. URLs still
+// containing a {{ placeholder are left alone.
+func EnsureScheme(rawURL string) string {
+	if rawURL == "" || schemeRE.MatchString(rawURL) || strings.Contains(rawURL, "{{") {
+		return rawURL
+	}
+	return "http://" + rawURL
+}
 
 // ResolveOptions supplies the context for resolving a request beyond its
 // variables. A zero Now means time.Now(); a nil Rand means a freshly seeded
@@ -57,7 +69,7 @@ func ResolveRequest(req httpfile.Request, vars map[string]string, opts ResolveOp
 	}
 
 	resolved := req
-	resolved.URL = merge(req.URL)
+	resolved.URL = EnsureScheme(merge(req.URL))
 	if len(req.Headers) > 0 {
 		resolved.Headers = make([]httpfile.Header, len(req.Headers))
 		for i, h := range req.Headers {

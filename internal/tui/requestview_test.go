@@ -994,3 +994,13 @@ func TestRequestModel_ApplyEditResolvesDynamicVariables(t *testing.T) {
 		t.Errorf("Authorization = %q, missingVars = %v; a plain leftover placeholder must stay literal and block", m.resolved.Headers[1].Value, m.missingVars)
 	}
 }
+
+func TestRequestModel_ApplyEditAddsHTTPScheme(t *testing.T) {
+	m := newRequestModel("", "", &httpfile.File{}, httpfile.Request{Method: "GET", URL: "https://example.com"}, newTestHistoryStore(t), "")
+	m, _ = m.startEditing()
+	m.editor.SetValue("GET localhost:8080/x\n")
+	m = m.applyEdit()
+	if m.editing || m.resolved.URL != "http://localhost:8080/x" {
+		t.Errorf("editing = %v, URL = %q", m.editing, m.resolved.URL)
+	}
+}

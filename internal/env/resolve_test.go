@@ -185,3 +185,31 @@ func TestResolveRequest_EmptyBaseDirSkipsIncludes(t *testing.T) {
 		t.Errorf("Body = %q, missing = %v; an empty BaseDir must not read files", got.Body, missing)
 	}
 }
+
+func TestEnsureScheme(t *testing.T) {
+	cases := map[string]string{
+		"localhost:8080/x":    "http://localhost:8080/x",
+		"example.com/api?a=1": "http://example.com/api?a=1",
+		"https://example.com": "https://example.com",
+		"HTTP://example.com":  "HTTP://example.com",
+		"{{host}}/x":          "{{host}}/x",
+		"":                    "",
+	}
+	for in, want := range cases {
+		if got := EnsureScheme(in); got != want {
+			t.Errorf("EnsureScheme(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestResolveRequest_AddsSchemeAfterSubstitution(t *testing.T) {
+	req := httpfile.Request{Method: "GET", URL: "{{host}}/users"}
+	got, _ := ResolveRequest(req, map[string]string{"host": "localhost:8080"}, testResolveOptions(""))
+	if got.URL != "http://localhost:8080/users" {
+		t.Errorf("URL = %q", got.URL)
+	}
+	got, _ = ResolveRequest(req, map[string]string{"host": "https://api.example.com"}, testResolveOptions(""))
+	if got.URL != "https://api.example.com/users" {
+		t.Errorf("URL = %q", got.URL)
+	}
+}
