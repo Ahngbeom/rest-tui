@@ -839,3 +839,38 @@ func TestRequestModel_ApplyEditKeepsLeftoverPlaceholdersBlocked(t *testing.T) {
 		t.Errorf("canSend() = false after removing every placeholder; missingVars = %v", m.missingVars)
 	}
 }
+
+func TestRequestModel_CycleEnvAfterEditNeedsSecondPress(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+	m := applyTestEdit(t, openAt(t, root, "a.http", ""), "GET https://edited.example.com/x\n")
+
+	m, _ = m.Update(typeRunes("e"))
+	if m.currentEnv() != "dev" || m.resolved.URL != "https://edited.example.com/x" {
+		t.Fatalf("first e changed state: env=%q url=%q", m.currentEnv(), m.resolved.URL)
+	}
+	if got := plainText(m.statusLine()); !strings.Contains(got, "edits will be discarded — press e again") {
+		t.Errorf("statusLine = %q", got)
+	}
+
+	m, _ = m.Update(typeRunes("e"))
+	if m.currentEnv() != "prod" || m.resolved.URL != "https://prod.example.com/x" {
+		t.Errorf("second e: env=%q url=%q", m.currentEnv(), m.resolved.URL)
+	}
+	if got := plainText(m.statusLine()); strings.Contains(got, "edits will be discarded") {
+		t.Errorf("prompt still shown after switching: %q", got)
+	}
+}
+
+func TestRequestModel_OtherKeyDisarmsEditDiscard(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+	m := applyTestEdit(t, openAt(t, root, "a.http", ""), "GET https://edited.example.com/x\n")
+
+	m, _ = m.Update(typeRunes("e"))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(typeRunes("e"))
+	if m.currentEnv() != "dev" {
+		t.Errorf("env = %q, want dev (prompt must re-arm after another key)", m.currentEnv())
+	}
+}

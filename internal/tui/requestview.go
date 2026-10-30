@@ -56,6 +56,8 @@ type requestModel struct {
 	resolved     httpfile.Request
 	missingVars  []string
 	blockedFlash bool
+	edited       bool
+	discardArmed bool
 
 	editing   bool
 	editor    textarea.Model
@@ -245,6 +247,7 @@ func (m requestModel) applyEdit() requestModel {
 		Body:    parsed.Body,
 	}
 	_, m.missingVars = env.ResolveRequest(m.resolved, nil)
+	m.edited = true
 	m.editing = false
 	m.editError = ""
 	m.editor.Blur()
@@ -319,6 +322,9 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.blockedFlash = false
+		if !key.Matches(msg, keys.CycleEnv) {
+			m.discardArmed = false
+		}
 		if m.editing {
 			switch {
 			case key.Matches(msg, keys.CancelEdit):
@@ -335,7 +341,13 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		case key.Matches(msg, keys.Edit):
 			return m.startEditing()
 		case key.Matches(msg, keys.CycleEnv):
+			if m.edited && m.canCycleEnv() && !m.discardArmed {
+				m.discardArmed = true
+				return m, nil
+			}
 			if len(m.envNames) > 0 {
+				m.discardArmed = false
+				m.edited = false
 				m.envIndex = (m.envIndex + 1) % len(m.envNames)
 				m.recompute()
 			}
@@ -514,6 +526,8 @@ func (m requestModel) statusLine() string {
 	switch {
 	case m.editing:
 		text, style = m.editError, errorTextStyle
+	case m.discardArmed:
+		text, style = "edits will be discarded — press e again", warnTextStyle
 	case m.blockedFlash:
 		text, style = m.blockedMessage(), blockedHighlightStyle
 	case m.copyStatus != "":
