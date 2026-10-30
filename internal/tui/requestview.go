@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/env"
@@ -89,6 +91,9 @@ func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Re
 			m.envNames = env.EnvNames(m.envSource.Public, m.envSource.Private)
 			if len(m.envNames) > 0 {
 				m.envIndex = 0
+				if i := slices.Index(m.envNames, preferredEnv); i >= 0 {
+					m.envIndex = i
+				}
 			}
 		}
 	}
@@ -451,7 +456,22 @@ func (m requestModel) untruncatedEnvLine() string {
 	if m.canCycleEnv() {
 		line += " — e cycle"
 	}
-	return line
+	return m.envLineStyle().Render(line)
+}
+
+// currentEnv is the selected env name, or "" when no env is available.
+func (m requestModel) currentEnv() string {
+	if m.envIndex < 0 || m.envIndex >= len(m.envNames) {
+		return ""
+	}
+	return m.envNames[m.envIndex]
+}
+
+func (m requestModel) envLineStyle() lipgloss.Style {
+	if strings.Contains(strings.ToLower(m.currentEnv()), "prod") {
+		return warnTextStyle
+	}
+	return lipgloss.NewStyle()
 }
 
 func (m requestModel) canCycleEnv() bool { return len(m.envNames) > 1 }

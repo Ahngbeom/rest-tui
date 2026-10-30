@@ -45,6 +45,7 @@ type App struct {
 	store    *history.Store
 	dirStore *dirhistory.Store
 	root     string
+	lastEnv  string
 
 	showHelp     bool
 	helpViewport viewport.Model
@@ -152,7 +153,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case openRequestMsg:
-		a.request = newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, "")
+		a.request = newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv)
 		a.request = a.request.SetSize(a.width, a.contentHeight())
 		a.screen = screenRequest
 		return a, nil
@@ -197,6 +198,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.browser, cmd = a.browser.Update(msg)
 	case screenRequest:
 		a.request, cmd = a.request.Update(msg)
+		if env := a.request.currentEnv(); env != "" {
+			a.lastEnv = env
+		}
 	case screenHistory:
 		a.history, cmd = a.history.Update(msg)
 	case screenDirHistory:

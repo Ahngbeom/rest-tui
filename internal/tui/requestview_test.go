@@ -745,3 +745,26 @@ func TestRequestModel_EnvLineShowsParseError(t *testing.T) {
 		t.Errorf("envLine = %q, want prefix %q", got, "http-client.env.json: ")
 	}
 }
+
+func TestNewRequestModel_PreferredEnvWinsWhenPresent(t *testing.T) {
+	root := t.TempDir()
+	writeNestedFile(t, filepath.Join(root, "http-client.env.json"), threeEnvs)
+
+	if got := openAt(t, root, "a.http", "staging").currentEnv(); got != "staging" {
+		t.Errorf("currentEnv = %q, want staging", got)
+	}
+	if got := openAt(t, root, "a.http", "qa").currentEnv(); got != "dev" {
+		t.Errorf("currentEnv = %q, want dev (alphabetical first)", got)
+	}
+}
+
+func TestRequestModel_ProdEnvUsesWarningStyle(t *testing.T) {
+	for name, warn := range map[string]bool{"prod": true, "Production": true, "preprod-eu": true, "staging": false} {
+		root := t.TempDir()
+		writeNestedFile(t, filepath.Join(root, "http-client.env.json"), `{"`+name+`": {}}`)
+		m := openAt(t, root, "a.http", "")
+		if got := m.envLineStyle().GetForeground() == colorWarning; got != warn {
+			t.Errorf("%s: warning style = %v, want %v", name, got, warn)
+		}
+	}
+}

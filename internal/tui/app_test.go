@@ -463,3 +463,34 @@ func TestApp_EnvLineFitsTerminalWithDeepEnvPath(t *testing.T) {
 		assertViewFits(t, model.(App).View(), sz[0], sz[1])
 	}
 }
+
+func TestApp_SelectedEnvCarriesToNextRequest(t *testing.T) {
+	a := newTestApp(t)
+	writeNestedFile(t, filepath.Join(a.root, "http-client.env.json"), threeEnvs)
+	writeNestedFile(t, filepath.Join(a.root, "qa", "http-client.env.json"), `{"dev": {}, "qa": {}}`)
+	open := func(a App, path string) App {
+		model, _ := a.Update(openRequestMsg{filePath: path, file: &httpfile.File{}, req: httpfile.Request{Method: "GET", URL: "https://example.com"}})
+		return model.(App)
+	}
+	press := func(a App, s string) App {
+		model, _ := a.Update(typeRunes(s))
+		return model.(App)
+	}
+
+	a = press(open(a, filepath.Join(a.root, "a.http")), "e")
+	if a.request.currentEnv() != "prod" || a.lastEnv != "prod" {
+		t.Fatalf("currentEnv = %q, lastEnv = %q, want prod", a.request.currentEnv(), a.lastEnv)
+	}
+	if got := open(a, filepath.Join(a.root, "b.http")).request.currentEnv(); got != "prod" {
+		t.Errorf("next request env = %q, want prod", got)
+	}
+
+	a = press(open(a, filepath.Join(t.TempDir(), "noenv.http")), "j")
+	if a.lastEnv != "prod" {
+		t.Errorf("lastEnv = %q after a request with no env file, want prod kept", a.lastEnv)
+	}
+
+	if got := open(a, filepath.Join(a.root, "qa", "c.http")).request.currentEnv(); got != "dev" {
+		t.Errorf("env in folder without prod = %q, want dev", got)
+	}
+}

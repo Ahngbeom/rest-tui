@@ -12,12 +12,15 @@ var (
 	colorMuted     = lipgloss.Color("8")
 	colorError     = lipgloss.Color("9")
 	colorSuccess   = lipgloss.Color("10")
+	colorWarning   = lipgloss.Color("11")
 	colorFaintText = lipgloss.Color("245")
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorAccent).
 			Padding(0, 1)
+
+	warnTextStyle = lipgloss.NewStyle().Foreground(colorWarning)
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(colorFaintText).
