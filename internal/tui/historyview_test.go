@@ -502,3 +502,58 @@ func TestHistoryModel_RefreshKeepsCursorOnSameEntry(t *testing.T) {
 		t.Errorf("selected ID = %q, want %q", got, a.ID)
 	}
 }
+
+func newFilterHistoryModel(t *testing.T) (historyModel, *history.Store) {
+	t.Helper()
+	store := newTestHistoryStore(t)
+	for _, u := range []string{"https://example.com/users", "https://example.com/orders"} {
+		if _, err := store.Append(history.Entry{Method: "GET", URL: u}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	return newHistoryModel(store).refresh().SetSize(120, 20), store
+}
+
+func TestHistoryModel_FilterThenEnterOpensFilteredEntry(t *testing.T) {
+	m, _ := newFilterHistoryModel(t)
+	m.list.SetFilterText("orders")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.selected == nil || !strings.HasSuffix(m.selected.URL, "/orders") {
+		t.Errorf("selected = %+v, want the /orders entry", m.selected)
+	}
+}
+
+func TestHistoryModel_EscWithFilterAppliedClearsFilterFirst(t *testing.T) {
+	m, _ := newFilterHistoryModel(t)
+	m.list.SetFilterText("orders")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.list.FilterState() != list.Unfiltered {
+		t.Errorf("FilterState = %v, want Unfiltered", m.list.FilterState())
+	}
+	if cmd != nil {
+		if _, ok := cmd().(backToBrowserMsg); ok {
+			t.Error("esc went back to the browser instead of clearing the filter")
+		}
+	}
+}
+
+func TestHistoryModel_RefreshWithFilterAppliedShowsAllAndKeepsCursor(t *testing.T) {
+	m, store := newFilterHistoryModel(t)
+	m.list.SetFilterText("orders")
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/new"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	m = m.refresh()
+
+	if m.list.FilterState() != list.Unfiltered || len(m.list.VisibleItems()) != 3 {
+		t.Errorf("FilterState = %v, visible = %d, want Unfiltered and 3", m.list.FilterState(), len(m.list.VisibleItems()))
+	}
+	if it, ok := m.list.SelectedItem().(entryItem); !ok || !strings.HasSuffix(it.entry.URL, "/orders") {
+		t.Errorf("SelectedItem = %+v, want the /orders entry", m.list.SelectedItem())
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -754,5 +755,24 @@ func TestApp_EscFromBrowserOpenedRequestReturnsToBrowser(t *testing.T) {
 	model, _ = model.Update(cmd())
 	if got := model.(App); got.screen != screenBrowser {
 		t.Errorf("screen = %v, want screenBrowser", got.screen)
+	}
+}
+
+func TestApp_FilterTypingSwallowsGlobalKeys(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "a.http", "GET https://example.com/a\n")
+	a := newLayoutApp(t, root, newTestHistoryStore(t), 120, 35)
+
+	a = pressKeys(a, "/", "q", "h", "d", "?", "R", "o")
+
+	if a.screen != screenBrowser || a.showHelp {
+		t.Errorf("screen = %v, showHelp = %v; filter typing leaked into global keys", a.screen, a.showHelp)
+	}
+	if got := a.browser.files.FilterValue(); got != "qhd?Ro" {
+		t.Errorf("FilterValue = %q, want %q", got, "qhd?Ro")
+	}
+	a = pressKeys(a, "esc")
+	if a.browser.files.FilterState() != list.Unfiltered || a.screen != screenBrowser {
+		t.Errorf("after esc: FilterState = %v, screen = %v", a.browser.files.FilterState(), a.screen)
 	}
 }

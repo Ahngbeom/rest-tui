@@ -29,7 +29,7 @@ func newDirHistoryModel(store *dirhistory.Store) dirHistoryModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Directories"
 	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
 
 	return dirHistoryModel{store: store, list: l}
 }
@@ -48,8 +48,13 @@ func (m dirHistoryModel) refresh() dirHistoryModel {
 	for i, e := range entries {
 		items[i] = dirEntryItem{entry: e}
 	}
+	m.list.ResetFilter()
 	m.list.SetItems(items)
 	return m
+}
+
+func (m dirHistoryModel) isFiltering() bool {
+	return m.list.FilterState() == list.Filtering
 }
 
 func (m dirHistoryModel) SetSize(width, height int) dirHistoryModel {
@@ -61,7 +66,7 @@ func (m dirHistoryModel) SetSize(width, height int) dirHistoryModel {
 }
 
 func (m dirHistoryModel) Update(msg tea.Msg) (dirHistoryModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && !listCapturesKey(m.list, keyMsg) {
 		switch {
 		case key.Matches(keyMsg, keys.Back):
 			return m, func() tea.Msg { return backToBrowserMsg{} }

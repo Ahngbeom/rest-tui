@@ -102,7 +102,17 @@ func (a App) Init() tea.Cmd {
 // which case single-character global shortcuts (h/d/q/?) must be routed to
 // the screen's own Update instead of being intercepted here.
 func (a App) activeScreenIsEditing() bool {
-	return a.screen == screenRequest && a.request.isEditing()
+	switch a.screen {
+	case screenRequest:
+		return a.request.isEditing()
+	case screenBrowser:
+		return a.browser.isFiltering()
+	case screenHistory:
+		return a.history.isFiltering()
+	case screenDirHistory:
+		return a.dirHistory.isFiltering()
+	}
+	return false
 }
 
 func (a App) contentHeight() int {
@@ -335,14 +345,14 @@ func (a App) footerHints() []hint {
 		if a.history.mode == historyModeDetail {
 			return append([]hint{{"↑/↓", "scroll"}, {"r", "rerun"}, {"c", "copy"}, {"esc", "back"}}, tail...)
 		}
-		return append([]hint{{"↑/↓", "move"}, {"enter", "detail"}, {"r", "rerun"}, {"esc", "back"}}, tail...)
+		return append([]hint{{"↑/↓", "move"}, {"enter", "detail"}, {"r", "rerun"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	case screenDirHistory:
-		return append([]hint{{"↑/↓", "move"}, {"enter", "switch"}, {"esc", "back"}}, tail...)
+		return append([]hint{{"↑/↓", "move"}, {"enter", "switch"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	default:
 		if a.browser.focus == paneRequests {
-			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"tab", "← files"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
+			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"/", "filter"}, {"tab", "← files"}, {"esc", "back"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 		}
-		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"tab", "→ requests"}, {"h", "history"}, {"d", "dirs"}}, tail...)
+		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "→ requests"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 	}
 }
 
@@ -359,6 +369,7 @@ func helpLines() []string {
 		"  ↑/↓, j/k      move selection",
 		"  tab           switch files/requests pane",
 		"  enter         open file / run request",
+		"  /             filter list (esc clears)",
 		"",
 		"Request view",
 		"  e             cycle environment",
@@ -373,10 +384,12 @@ func helpLines() []string {
 		"History",
 		"  enter         view detail",
 		"  r             rerun (asks y/n unless GET/HEAD/OPTIONS)",
+		"  /             filter list (esc clears)",
 		"  c, y          copy request/response (detail view)",
 		"",
 		"Directory History",
 		"  enter         switch to selected directory",
+		"  /             filter list (esc clears)",
 	}
 }
 

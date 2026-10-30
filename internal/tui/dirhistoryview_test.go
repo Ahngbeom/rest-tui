@@ -79,3 +79,19 @@ func TestDirHistoryModel_EmptyStoreShowsEmptyList(t *testing.T) {
 		t.Errorf("loadErr = %v, want nil", m.loadErr)
 	}
 }
+
+func TestDirHistoryModel_FilterNarrowsDirs(t *testing.T) {
+	store := newTestDirHistoryStore(t)
+	for _, p := range []string{"/tmp/alpha", "/tmp/beta"} {
+		if _, err := store.Touch(p); err != nil {
+			t.Fatalf("Touch: %v", err)
+		}
+	}
+	m := newDirHistoryModel(store).refresh().SetSize(120, 20)
+
+	m.list.SetFilterText("alpha")
+
+	if n := len(m.list.VisibleItems()); n != 1 {
+		t.Errorf("VisibleItems = %d, want 1", n)
+	}
+}

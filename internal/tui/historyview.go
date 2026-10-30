@@ -30,7 +30,9 @@ type entryItem struct {
 	entry history.Entry
 }
 
-func (e entryItem) FilterValue() string { return e.entry.URL }
+func (e entryItem) FilterValue() string {
+	return e.entry.Method + " " + e.entry.Name + " " + e.entry.URL + " " + e.entry.Env
+}
 
 func relativeTime(t, now time.Time) string {
 	d := now.Sub(t)
@@ -165,7 +167,7 @@ func newHistoryModel(store *history.Store) historyModel {
 	l := list.New(nil, entryRowDelegate{}, 0, 0)
 	l.Title = "History"
 	l.SetShowHelp(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
 
 	return historyModel{store: store, list: l, detail: viewport.New(0, 0)}
 }
@@ -188,6 +190,7 @@ func (m historyModel) refresh() historyModel {
 	for i, e := range entries {
 		items[i] = entryItem{entry: e}
 	}
+	m.list.ResetFilter()
 	m.list.SetItems(items)
 	for i, it := range items {
 		if keepID != "" && it.(entryItem).entry.ID == keepID {
@@ -232,6 +235,10 @@ func (m historyModel) rerunPrompt() string {
 	return warnTextStyle.Render(fmt.Sprintf("rerun %s %s? (y/n)", method, url))
 }
 
+func (m historyModel) isFiltering() bool {
+	return m.mode == historyModeList && m.list.FilterState() == list.Filtering
+}
+
 func (m historyModel) SetSize(width, height int) historyModel {
 	m.width, m.height = width, height
 	m = m.layout()
@@ -261,6 +268,11 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.mode == historyModeList && listCapturesKey(m.list, msg) {
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
 		if m.pendingRerun != nil {
 			entry := *m.pendingRerun
 			m.pendingRerun = nil

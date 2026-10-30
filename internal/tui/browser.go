@@ -56,7 +56,9 @@ type requestItem struct {
 	req httpfile.Request
 }
 
-func (r requestItem) FilterValue() string { return r.req.Name }
+func (r requestItem) FilterValue() string {
+	return r.req.Name + " " + r.req.Method + " " + r.req.URL
+}
 
 func (r requestItem) Title() string {
 	if r.req.Name != "" {
@@ -102,15 +104,18 @@ type browserModel struct {
 }
 
 func newBrowserModel(root string, store *history.Store) browserModel {
-	files := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	fileDelegate := list.NewDefaultDelegate()
+	fileDelegate.ShowDescription = false
+	fileDelegate.SetSpacing(0)
+	files := list.New(nil, fileDelegate, 0, 0)
 	files.Title = "HTTP Files"
 	files.SetShowHelp(false)
-	files.SetFilteringEnabled(false)
+	files.SetFilteringEnabled(true)
 
 	requests := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	requests.Title = "Requests"
 	requests.SetShowHelp(false)
-	requests.SetFilteringEnabled(false)
+	requests.SetFilteringEnabled(true)
 
 	m := browserModel{root: root, store: store, files: files, requests: requests}
 
@@ -146,6 +151,7 @@ func (m browserModel) refreshRecent() browserModel {
 	}
 	m.requests.Title = "Recent"
 	m.requests.SetDelegate(entryRowDelegate{})
+	m.requests.ResetFilter()
 	m.requests.SetItems(items)
 	m.requests.Select(0)
 	return m
@@ -197,6 +203,7 @@ func (m browserModel) selectFile() browserModel {
 		return m
 	}
 	m.requests.SetDelegate(list.NewDefaultDelegate())
+	m.requests.ResetFilter()
 	m.requests.Title = "Requests" // selecting a file always replaces any Recent list
 
 	full := filepath.Join(m.root, item.rel)
@@ -235,8 +242,32 @@ func (m browserModel) selectFile() browserModel {
 	return m.SetSize(m.width, m.height)
 }
 
+// listCapturesKey reports whether l's built-in filter handling must see msg
+// before the screen's own bindings: every key while the filter input is
+// active, and esc once a filter is applied (it clears the filter).
+func listCapturesKey(l list.Model, msg tea.KeyMsg) bool {
+	switch l.FilterState() {
+	case list.Filtering:
+		return true
+	case list.FilterApplied:
+		return msg.Type == tea.KeyEsc
+	}
+	return false
+}
+
+func (m browserModel) focusedList() list.Model {
+	if m.focus == paneFiles {
+		return m.files
+	}
+	return m.requests
+}
+
+func (m browserModel) isFiltering() bool {
+	return m.focusedList().FilterState() == list.Filtering
+}
+
 func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && !listCapturesKey(m.focusedList(), keyMsg) {
 		switch {
 		case key.Matches(keyMsg, keys.Tab):
 			if m.focus == paneFiles && (m.parsedFile != nil || len(m.requests.Items()) > 0) {

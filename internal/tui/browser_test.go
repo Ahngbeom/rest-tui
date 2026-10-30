@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
+	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
 
 func writeTestFile(t *testing.T, dir, name, content string) string {
@@ -429,5 +431,88 @@ func TestBrowserModel_RecentUsesEntryRows(t *testing.T) {
 	m := newBrowserModel(t.TempDir(), store).SetSize(120, 20)
 	if got := ansi.Strip(m.View()); !strings.Contains(got, "200 GET") {
 		t.Errorf("view missing entry row:\n%s", got)
+	}
+}
+
+func keyRunes(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+
+func TestBrowserModel_FilesRenderOneLineEach(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"a.http", "b.http", "c.http"} {
+		writeTestFile(t, dir, n, "GET https://example.com/\n")
+	}
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 20)
+
+	var rows []int
+	for i, ln := range strings.Split(m.files.View(), "\n") {
+		for _, n := range []string{"a.http", "b.http", "c.http"} {
+			if strings.Contains(ln, n) {
+				rows = append(rows, i)
+			}
+		}
+	}
+	if len(rows) != 3 || rows[1]-rows[0] != 1 || rows[2]-rows[1] != 1 {
+		t.Errorf("file rows at lines %v, want three consecutive lines", rows)
+	}
+}
+
+func TestBrowserModel_FilterNarrowsFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"a.http", "users.http", "orders.http"} {
+		writeTestFile(t, dir, n, "GET https://example.com/\n")
+	}
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 20)
+
+	m.files.SetFilterText("users")
+
+	if n := len(m.files.VisibleItems()); n != 1 {
+		t.Errorf("VisibleItems = %d, want 1", n)
+	}
+}
+
+func TestBrowserModel_EnterWhileFilteringAppliesFilterNotOpen(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "GET https://example.com/a\n")
+	writeTestFile(t, dir, "users.http", "GET https://example.com/u\n")
+	m := newBrowserModel(dir, newTestHistoryStore(t)).SetSize(120, 20)
+
+	m, _ = m.Update(keyRunes("/"))
+	m, _ = m.Update(keyRunes("u"))
+	if m.files.FilterState() != list.Filtering {
+		t.Fatalf("FilterState = %v, want Filtering", m.files.FilterState())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.files.FilterState() != list.FilterApplied {
+		t.Errorf("FilterState = %v, want FilterApplied", m.files.FilterState())
+	}
+	if m.parsedFile != nil || m.focus != paneFiles {
+		t.Errorf("Enter opened a file while filtering: parsedFile=%v focus=%v", m.parsedFile, m.focus)
+	}
+}
+
+func TestRequestItemFilterValueIncludesMethodAndURL(t *testing.T) {
+	v := requestItem{req: httpfile.Request{Method: "GET", URL: "https://x/users"}}.FilterValue()
+	if !strings.Contains(v, "GET") || !strings.Contains(v, "users") {
+		t.Errorf("FilterValue = %q, want method and URL", v)
+	}
+}
+
+func TestBrowserModel_SelectFileAfterRecentFilterShowsRequests(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "a.http", "### one\nGET https://a.example/1\n\n### two\nGET https://a.example/2\n")
+	store := newTestHistoryStore(t)
+	if _, err := store.Append(history.Entry{Method: "GET", URL: "https://example.com/z"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	m := newBrowserModel(dir, store).SetSize(120, 20)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.requests.SetFilterText("x")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if n := len(m.requests.VisibleItems()); n != 2 {
+		t.Errorf("VisibleItems = %d, want 2", n)
 	}
 }
