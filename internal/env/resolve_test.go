@@ -1,7 +1,9 @@
 package env
 
 import (
+	"io"
 	"math/rand/v2"
+	"mime/multipart"
 	"net/url"
 	"path/filepath"
 	"reflect"
@@ -146,6 +148,35 @@ func TestResolveRequest_IncludesFileInsideMultipartPart(t *testing.T) {
 	want := "--b\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\n\nhello\n--b--"
 	if got.Body != want {
 		t.Errorf("Body = %q, want %q", got.Body, want)
+	}
+}
+
+func TestResolveRequest_CRLFMultipartIncludeKeepsLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "hello\n")
+	src := "POST https://example.com\r\n" +
+		"Content-Type: multipart/form-data; boundary=b\r\n" +
+		"\r\n" +
+		"--b\r\n" +
+		"Content-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\n" +
+		"\r\n" +
+		"< ./a.txt\r\n" +
+		"--b--\r\n"
+	f, err := httpfile.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got, missing := ResolveRequest(f.Requests[0], nil, testResolveOptions(dir))
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v", missing)
+	}
+	part, err := multipart.NewReader(strings.NewReader(got.Body), "b").NextPart()
+	if err != nil {
+		t.Fatalf("NextPart: %v (body %q)", err, got.Body)
+	}
+	data, err := io.ReadAll(part)
+	if err != nil || string(data) != "hello" {
+		t.Errorf("part = %q, err = %v (body %q)", data, err, got.Body)
 	}
 }
 
