@@ -3,12 +3,14 @@
 package history
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
@@ -37,6 +39,41 @@ type Entry struct {
 	Name string `json:",omitempty"`
 	// Redirects lists the redirect hops followed before the final response.
 	Redirects []string `json:",omitempty"`
+}
+
+type entryAlias Entry
+
+// entryJSON is Entry's on-disk form. A RequestBody that is not valid UTF-8
+// (an included binary file) would be mangled to U+FFFD by encoding/json, so
+// it is stored in RequestBodyBase64 instead and reruns send the exact bytes.
+type entryJSON struct {
+	entryAlias
+	RequestBodyBase64 string `json:",omitempty"`
+}
+
+func (e Entry) MarshalJSON() ([]byte, error) {
+	j := entryJSON{entryAlias: entryAlias(e)}
+	if !utf8.ValidString(e.RequestBody) {
+		j.RequestBodyBase64 = base64.StdEncoding.EncodeToString([]byte(e.RequestBody))
+		j.RequestBody = ""
+	}
+	return json.Marshal(j)
+}
+
+func (e *Entry) UnmarshalJSON(data []byte) error {
+	var j entryJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	if j.RequestBodyBase64 != "" {
+		body, err := base64.StdEncoding.DecodeString(j.RequestBodyBase64)
+		if err != nil {
+			return fmt.Errorf("RequestBodyBase64: %w", err)
+		}
+		j.RequestBody = string(body)
+	}
+	*e = Entry(j.entryAlias)
+	return nil
 }
 
 // Store reads and appends Entry records to a JSON file on disk.

@@ -400,3 +400,45 @@ func TestStore_NameAndRedirectsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_BinaryRequestBodyRoundTripsExactly(t *testing.T) {
+	s, path := newTestStore(t)
+	body := "\x00\xff\x80\x01"
+	if _, err := s.Append(Entry{Method: "POST", URL: "https://example.com", RequestBody: body}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	got, err := NewStore(path).List(1)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].RequestBody != body {
+		t.Errorf("RequestBody = % x, want % x", got[0].RequestBody, body)
+	}
+}
+
+func TestStore_TextRequestBodyIsStoredAsPlainText(t *testing.T) {
+	s, path := newTestStore(t)
+	if _, err := s.Append(Entry{Method: "POST", URL: "https://example.com", RequestBody: `{"name":"한글"}`}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "RequestBodyBase64") {
+		t.Errorf("text body should not be base64-encoded: %s", data)
+	}
+	got, _ := s.List(1)
+	if got[0].RequestBody != `{"name":"한글"}` {
+		t.Errorf("RequestBody = %q", got[0].RequestBody)
+	}
+}
+
+func TestStore_LoadsEntriesWrittenWithoutBase64Field(t *testing.T) {
+	s, path := newTestStore(t)
+	old := `[{"ID":"old-1","Method":"POST","URL":"https://example.com","RequestBody":"plain"}]`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := s.List(0)
+	if err != nil || len(got) != 1 || got[0].RequestBody != "plain" || s.Warning() != "" {
+		t.Errorf("List = %+v, err = %v, warning = %q", got, err, s.Warning())
+	}
+}
