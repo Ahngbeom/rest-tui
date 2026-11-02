@@ -65,6 +65,7 @@ type requestModel struct {
 
 	editing   bool
 	editor    textarea.Model
+	editSeed  string
 	editError string
 
 	executing   bool
@@ -222,6 +223,7 @@ func serializeRequest(req httpfile.Request) string {
 // edits act on the final, variable-substituted values) and focuses it.
 func (m requestModel) startEditing() (requestModel, tea.Cmd) {
 	m.editor.SetValue(serializeRequest(m.resolved))
+	m.editSeed = m.editor.Value()
 	cmd := m.editor.Focus()
 	m.editing = true
 	m.editError = ""
@@ -236,14 +238,20 @@ func (m requestModel) cancelEditing() requestModel {
 }
 
 // applyEdit reparses the edit buffer via httpfile.ParseVerbatimBody and, on
-// success, replaces m.resolved with the edited text, generating any
-// {{$dynamic}} variables in it. The buffer was seeded from already-resolved
-// values, so `< path` lines are not included again and the original
-// Unsupported warnings carry over. Other {{…}} placeholders stay literal and
-// are collected into m.missingVars so they block sending. On failure it
-// stays in edit mode with the buffer intact and sets m.editError.
+// success, replaces m.resolved with the edited text. A buffer identical to
+// the one startEditing seeded leaves the request untouched. Otherwise the
+// {{…}} placeholders already present in the seed stay literal, while each
+// newly typed one is resolved: {{$dynamic}} variables are generated and any
+// other placeholder is collected into m.missingVars so it blocks sending.
+// The seed came from already-resolved values, so `< path` lines are not
+// included again and the original Unsupported warnings carry over. On
+// failure it stays in edit mode with the buffer intact and sets m.editError.
 func (m requestModel) applyEdit() requestModel {
-	f, err := httpfile.ParseVerbatimBody([]byte(m.editor.Value()))
+	value := m.editor.Value()
+	if value == m.editSeed {
+		return m.cancelEditing()
+	}
+	f, err := httpfile.ParseVerbatimBody([]byte(value))
 	if err != nil {
 		m.editError = err.Error()
 		return m
@@ -263,13 +271,60 @@ func (m requestModel) applyEdit() requestModel {
 	}
 	opts := m.resolveOptions()
 	opts.BaseDir = ""
-	m.resolved, m.missingVars = env.ResolveRequest(edited, nil, opts)
+	m.resolved, m.missingVars = resolveNewPlaceholders(m.editSeed, value, edited, opts)
 	m.edited = true
 	m.editing = false
 	m.editError = ""
 	m.editor.Blur()
 	m.refreshContent()
 	return m
+}
+
+// resolveNewPlaceholders resolves req like env.ResolveRequest with no vars,
+// except that the first n occurrences of each placeholder token, where n is
+// how often that exact token appears in seed, are hidden behind sentinels
+// and restored verbatim afterwards. buffer is the text req was parsed from.
+func resolveNewPlaceholders(seed, buffer string, req httpfile.Request, opts env.ResolveOptions) (httpfile.Request, []string) {
+	literal := map[string]int{}
+	env.ReplacePlaceholders(seed, func(tok string) string {
+		literal[tok]++
+		return tok
+	})
+
+	// The leading "{{" keeps EnsureScheme from prefixing a URL that starts with
+	// a literal placeholder; U+E000 is never generated, so checking buffer alone
+	// rules out a collision with user text.
+	prefix := "{{\uE000"
+	for n := 0; strings.Contains(buffer, prefix); n++ {
+		prefix = fmt.Sprintf("{{\uE000%d\uE000", n)
+	}
+	var pairs []string
+	hide := func(text string) string {
+		return env.ReplacePlaceholders(text, func(tok string) string {
+			if literal[tok] == 0 {
+				return tok
+			}
+			literal[tok]--
+			sentinel := fmt.Sprintf("%s%d\uE001}}", prefix, len(pairs)/2)
+			pairs = append(pairs, sentinel, tok)
+			return sentinel
+		})
+	}
+	req.URL = hide(req.URL)
+	req.Headers = slices.Clone(req.Headers)
+	for i := range req.Headers {
+		req.Headers[i].Value = hide(req.Headers[i].Value)
+	}
+	req.Body = hide(req.Body)
+
+	resolved, missing := env.ResolveRequest(req, nil, opts)
+	restore := strings.NewReplacer(pairs...)
+	resolved.URL = restore.Replace(resolved.URL)
+	for i := range resolved.Headers {
+		resolved.Headers[i].Value = restore.Replace(resolved.Headers[i].Value)
+	}
+	resolved.Body = restore.Replace(resolved.Body)
+	return resolved, missing
 }
 
 func (m requestModel) isEditing() bool { return m.editing }

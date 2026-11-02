@@ -42,3 +42,9 @@ func substituteFunc(text string, lookup func(name string) (string, bool)) (resul
 	sort.Strings(missing)
 	return result, missing
 }
+
+// ReplacePlaceholders returns text with every placeholder Substitute would
+// see replaced by fn(token), where token is the whole match including braces.
+func ReplacePlaceholders(text string, fn func(token string) string) string {
+	return placeholderRE.ReplaceAllStringFunc(text, fn)
+}

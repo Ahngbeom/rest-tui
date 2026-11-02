@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Ahngbeom/rest-tui/internal/env"
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
@@ -1534,5 +1535,127 @@ func TestRequestModel_UnchangedApplyKeepsTripleHashBodyLine(t *testing.T) {
 	}
 	if m.resolved.Body != body {
 		t.Errorf("Body = %q, want %q", m.resolved.Body, body)
+	}
+}
+
+func includeTestModel(t *testing.T, included string) requestModel {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte(included), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
+	return newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+}
+
+func TestRequestModel_UnchangedEditKeepsIncludedPlaceholdersLiteral(t *testing.T) {
+	m := includeTestModel(t, `{"tpl":"{{name}}","id":"{{$uuid}}"}`)
+	before := m.resolved
+
+	m = applyUnchangedEdit(t, m)
+
+	if m.resolved.Body != before.Body {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, before.Body)
+	}
+	if !m.canSend() {
+		t.Errorf("canSend() = false, missingVars = %v", m.missingVars)
+	}
+	if m.edited {
+		t.Error("edited = true after applying an unchanged buffer")
+	}
+}
+
+func TestRequestModel_UnchangedEditKeepsHistoryDynamicPlaceholderLiteral(t *testing.T) {
+	entry := history.Entry{Method: "POST", URL: "https://example.com", RequestBody: `{"id":"{{$uuid}}"}`}
+	m := newRequestModelFromEntryNoSend(entry, newTestHistoryStore(t))
+
+	m = applyUnchangedEdit(t, m)
+
+	if m.resolved.Body != entry.RequestBody {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, entry.RequestBody)
+	}
+}
+
+func TestRequestModel_UnchangedEditKeepsBodyFormatting(t *testing.T) {
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: `{"a":1,"b":[1,2]}`}
+	m := newTestRequestModel(t, req)
+
+	m = applyUnchangedEdit(t, m)
+
+	if m.resolved.Body != req.Body {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, req.Body)
+	}
+}
+
+func TestRequestModel_ChangedEditGeneratesOnlyNewDynamicPlaceholders(t *testing.T) {
+	entry := history.Entry{Method: "GET", URL: "https://example.com",
+		RequestHeaders: []httpfile.Header{{Name: "X-Old", Value: "{{$uuid}}"}}}
+	m := newRequestModelFromEntryNoSend(entry, newTestHistoryStore(t))
+
+	m = applyTestEdit(t, m, "GET https://example.com\nX-Old: {{$uuid}}\nX-New: {{$uuid}}\n")
+
+	if got := m.resolved.Headers[0].Value; got != "{{$uuid}}" {
+		t.Errorf("X-Old = %q, want the recorded literal kept", got)
+	}
+	if got := m.resolved.Headers[1].Value; !uuidV4Pattern.MatchString(got) {
+		t.Errorf("X-New = %q, want a generated UUID", got)
+	}
+	if !m.canSend() {
+		t.Errorf("canSend() = false, missingVars = %v", m.missingVars)
+	}
+}
+
+func TestRequestModel_ChangedEditBlocksOnNewUnresolvedPlaceholder(t *testing.T) {
+	m := includeTestModel(t, `{"tpl":"{{name}}"}`)
+
+	m = applyTestEdit(t, m, serializeRequest(m.resolved)+"\n")
+	if !m.canSend() {
+		t.Fatalf("whitespace-only change blocked on pre-existing literal: missingVars = %v", m.missingVars)
+	}
+	m = applyTestEdit(t, m, "POST https://example.com\nX-Token: {{missing}}\n\n"+`{"tpl":"{{name}}"}`)
+
+	if !reflect.DeepEqual(m.missingVars, []string{"missing"}) {
+		t.Errorf("missingVars = %v, want [missing]", m.missingVars)
+	}
+	if !strings.Contains(m.resolved.Body, "{{name}}") {
+		t.Errorf("Body = %q, want the pre-existing {{name}} kept literal", m.resolved.Body)
+	}
+}
+
+func TestRequestModel_ChangedEditBlocksOnExtraCopyOfLiteralPlaceholder(t *testing.T) {
+	m := includeTestModel(t, `{"tpl":"{{name}}"}`)
+
+	m = applyTestEdit(t, m, "POST https://example.com\nX-Name: {{name}}\n\n"+`{"tpl":"{{name}}"}`)
+
+	if !reflect.DeepEqual(m.missingVars, []string{"name"}) {
+		t.Errorf("missingVars = %v, want [name] for the newly added copy", m.missingVars)
+	}
+}
+
+func TestRequestModel_ChangedEditKeepsLiteralURLPlaceholderWithoutScheme(t *testing.T) {
+	entry := history.Entry{Method: "GET", URL: "{{host}}/x"}
+	m := newRequestModelFromEntryNoSend(entry, newTestHistoryStore(t))
+
+	m = applyTestEdit(t, m, "GET {{host}}/x\nX-A: b\n")
+
+	if m.resolved.URL != "{{host}}/x" {
+		t.Errorf("URL = %q, want %q", m.resolved.URL, "{{host}}/x")
+	}
+	if !m.canSend() {
+		t.Errorf("canSend() = false, missingVars = %v", m.missingVars)
+	}
+}
+
+func TestResolveNewPlaceholders_UserTextResemblingSentinelSurvives(t *testing.T) {
+	seed := "GET https://example.com\nX-A: {{name}}\n"
+	userText := "{{0}} {{"
+	buffer := seed + "X-B: " + userText + "\n"
+	req := httpfile.Request{Method: "GET", URL: "https://example.com",
+		Headers: []httpfile.Header{{Name: "X-A", Value: "{{name}}"}, {Name: "X-B", Value: userText}}}
+
+	got, missing := resolveNewPlaceholders(seed, buffer, req, env.ResolveOptions{})
+
+	if got.Headers[0].Value != "{{name}}" || got.Headers[1].Value != userText || len(missing) != 0 {
+		t.Errorf("headers = %+v, missing = %v", got.Headers, missing)
 	}
 }
