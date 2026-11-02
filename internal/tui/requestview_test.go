@@ -1646,16 +1646,73 @@ func TestRequestModel_ChangedEditKeepsLiteralURLPlaceholderWithoutScheme(t *test
 	}
 }
 
-func TestResolveNewPlaceholders_UserTextResemblingSentinelSurvives(t *testing.T) {
-	seed := "GET https://example.com\nX-A: {{name}}\n"
-	userText := "{{0}} {{"
-	buffer := seed + "X-B: " + userText + "\n"
-	req := httpfile.Request{Method: "GET", URL: "https://example.com",
-		Headers: []httpfile.Header{{Name: "X-A", Value: "{{name}}"}, {Name: "X-B", Value: userText}}}
+func TestRequestModel_SecondEditKeepsEarlierUnresolvedPlaceholderBlocked(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "https://example.com"})
 
-	got, missing := resolveNewPlaceholders(seed, buffer, req, env.ResolveOptions{})
+	m = applyTestEdit(t, m, "GET https://example.com\nAuthorization: Bearer {{token}}\n")
+	m = applyTestEdit(t, m, "GET https://example.com\nAuthorization: Bearer {{token}}\nX-A: b\n")
 
-	if got.Headers[0].Value != "{{name}}" || got.Headers[1].Value != userText || len(missing) != 0 {
-		t.Errorf("headers = %+v, missing = %v", got.Headers, missing)
+	if !reflect.DeepEqual(m.missingVars, []string{"token"}) {
+		t.Errorf("missingVars = %v, want [token] still blocking", m.missingVars)
+	}
+}
+
+func TestRequestModel_ChangedEditKeepsUnresolvedEnvPlaceholderBlocked(t *testing.T) {
+	m := newTestRequestModel(t, httpfile.Request{Method: "GET", URL: "https://{{host}}/x"})
+	if !reflect.DeepEqual(m.missingVars, []string{"host"}) {
+		t.Fatalf("precondition: missingVars = %v", m.missingVars)
+	}
+
+	m = applyTestEdit(t, m, "GET https://{{host}}/x\nX-A: b\n")
+
+	if !reflect.DeepEqual(m.missingVars, []string{"host"}) {
+		t.Errorf("missingVars = %v, want [host] still blocking", m.missingVars)
+	}
+}
+
+func TestRequestModel_ChangedEditKeepsMissingIncludeBlocked(t *testing.T) {
+	dir := t.TempDir()
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./nope.json"}
+	m := newRequestModel(filepath.Join(dir, "a.http"), dir, &httpfile.File{}, req, newTestHistoryStore(t), "")
+	want := []string{env.MissingFilePrefix + "./nope.json"}
+	if !reflect.DeepEqual(m.missingVars, want) {
+		t.Fatalf("precondition: missingVars = %v", m.missingVars)
+	}
+
+	m = applyTestEdit(t, m, "POST https://example.com\nX-A: b\n\n< ./nope.json")
+	if !reflect.DeepEqual(m.missingVars, want) {
+		t.Errorf("missingVars = %v, want %v while the include line is still there", m.missingVars, want)
+	}
+
+	m = applyTestEdit(t, m, "POST https://example.com\nX-A: b\n\n{}")
+	if !m.canSend() {
+		t.Errorf("canSend() = false after removing the include line, missingVars = %v", m.missingVars)
+	}
+}
+
+func TestRequestModel_ChangedEditShieldsLiteralOnlyInItsOwnField(t *testing.T) {
+	entry := history.Entry{Method: "POST", URL: "https://example.com", RequestBody: `{"id":"{{$uuid}}"}`}
+	m := newRequestModelFromEntryNoSend(entry, newTestHistoryStore(t))
+
+	m = applyTestEdit(t, m, "POST https://example.com\nX-New: {{$uuid}}\n\n"+`{"id":"{{$uuid}}"}`)
+
+	if got := m.resolved.Headers[0].Value; !uuidV4Pattern.MatchString(got) {
+		t.Errorf("X-New = %q, want a generated UUID", got)
+	}
+	if want := `{"id":"{{$uuid}}"}`; m.resolved.Body != want {
+		t.Errorf("Body = %q, want %q", m.resolved.Body, want)
+	}
+}
+
+func TestRequestModel_ChangedEditKeepsTextThatLooksLikeASentinel(t *testing.T) {
+	lookalike := "{{\uE0000\uE001}}"
+	entry := history.Entry{Method: "GET", URL: "https://example.com", RequestHeaders: []httpfile.Header{
+		{Name: "X-A", Value: "{{$uuid}}"}, {Name: "X-B", Value: lookalike}}}
+	m := newRequestModelFromEntryNoSend(entry, newTestHistoryStore(t))
+
+	m = applyTestEdit(t, m, "GET https://example.com\nX-A: {{$uuid}}\nX-B: "+lookalike+"\nX-C: c\n")
+
+	if m.resolved.Headers[0].Value != "{{$uuid}}" || m.resolved.Headers[1].Value != lookalike {
+		t.Errorf("headers = %q", m.resolved.Headers)
 	}
 }

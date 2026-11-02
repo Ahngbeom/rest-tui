@@ -271,7 +271,7 @@ func (m requestModel) applyEdit() requestModel {
 	}
 	opts := m.resolveOptions()
 	opts.BaseDir = ""
-	m.resolved, m.missingVars = resolveNewPlaceholders(m.editSeed, value, edited, opts)
+	m.resolved, m.missingVars = resolveNewPlaceholders(m.editSeed, m.missingVars, value, edited, opts)
 	m.edited = true
 	m.editing = false
 	m.editError = ""
@@ -281,15 +281,39 @@ func (m requestModel) applyEdit() requestModel {
 }
 
 // resolveNewPlaceholders resolves req like env.ResolveRequest with no vars,
-// except that the first n occurrences of each placeholder token, where n is
-// how often that exact token appears in seed, are hidden behind sentinels
-// and restored verbatim afterwards. buffer is the text req was parsed from.
-func resolveNewPlaceholders(seed, buffer string, req httpfile.Request, opts env.ResolveOptions) (httpfile.Request, []string) {
-	literal := map[string]int{}
-	env.ReplacePlaceholders(seed, func(tok string) string {
-		literal[tok]++
-		return tok
-	})
+// except that placeholders already present in seed stay verbatim: in each of
+// the URL, the header values and the body, the first n occurrences of a token
+// are hidden behind sentinels and restored afterwards, where n is how often
+// that exact token appears in the same part of seed. Tokens whose names are
+// in blocked (the pre-edit missing list) are never hidden, and a blocked
+// missing-file entry is kept while its `< path` line is still in the body.
+// buffer is the text req was parsed from.
+func resolveNewPlaceholders(seed string, blocked []string, buffer string, req httpfile.Request, opts env.ResolveOptions) (httpfile.Request, []string) {
+	blockedSet := map[string]bool{}
+	for _, name := range blocked {
+		blockedSet[name] = true
+	}
+	count := func(texts ...string) map[string]int {
+		n := map[string]int{}
+		for _, text := range texts {
+			env.ReplacePlaceholders(text, func(tok, name string) string {
+				if !blockedSet[name] {
+					n[tok]++
+				}
+				return tok
+			})
+		}
+		return n
+	}
+	var urlLit, headerLit, bodyLit map[string]int
+	if f, err := httpfile.ParseVerbatimBody([]byte(seed)); err == nil && len(f.Requests) == 1 {
+		s := f.Requests[0]
+		values := make([]string, len(s.Headers))
+		for i, h := range s.Headers {
+			values[i] = h.Value
+		}
+		urlLit, headerLit, bodyLit = count(s.URL), count(values...), count(s.Body)
+	}
 
 	// The leading "{{" keeps EnsureScheme from prefixing a URL that starts with
 	// a literal placeholder; U+E000 is never generated, so checking buffer alone
@@ -299,8 +323,8 @@ func resolveNewPlaceholders(seed, buffer string, req httpfile.Request, opts env.
 		prefix = fmt.Sprintf("{{\uE000%d\uE000", n)
 	}
 	var pairs []string
-	hide := func(text string) string {
-		return env.ReplacePlaceholders(text, func(tok string) string {
+	hide := func(text string, literal map[string]int) string {
+		return env.ReplacePlaceholders(text, func(tok, _ string) string {
 			if literal[tok] == 0 {
 				return tok
 			}
@@ -310,20 +334,29 @@ func resolveNewPlaceholders(seed, buffer string, req httpfile.Request, opts env.
 			return sentinel
 		})
 	}
-	req.URL = hide(req.URL)
-	req.Headers = slices.Clone(req.Headers)
-	for i := range req.Headers {
-		req.Headers[i].Value = hide(req.Headers[i].Value)
+	masked := req
+	masked.URL = hide(req.URL, urlLit)
+	masked.Headers = slices.Clone(req.Headers)
+	for i := range masked.Headers {
+		masked.Headers[i].Value = hide(masked.Headers[i].Value, headerLit)
 	}
-	req.Body = hide(req.Body)
+	masked.Body = hide(req.Body, bodyLit)
 
-	resolved, missing := env.ResolveRequest(req, nil, opts)
+	resolved, missing := env.ResolveRequest(masked, nil, opts)
 	restore := strings.NewReplacer(pairs...)
 	resolved.URL = restore.Replace(resolved.URL)
 	for i := range resolved.Headers {
 		resolved.Headers[i].Value = restore.Replace(resolved.Headers[i].Value)
 	}
 	resolved.Body = restore.Replace(resolved.Body)
+
+	included := env.IncludePaths(req.Body)
+	for _, entry := range blocked {
+		path, ok := strings.CutPrefix(entry, env.MissingFilePrefix)
+		if ok && slices.Contains(included, path) && !slices.Contains(missing, entry) {
+			missing = append(missing, entry)
+		}
+	}
 	return resolved, missing
 }
 

@@ -44,7 +44,10 @@ func substituteFunc(text string, lookup func(name string) (string, bool)) (resul
 }
 
 // ReplacePlaceholders returns text with every placeholder Substitute would
-// see replaced by fn(token), where token is the whole match including braces.
-func ReplacePlaceholders(text string, fn func(token string) string) string {
-	return placeholderRE.ReplaceAllStringFunc(text, fn)
+// see replaced by fn(token, name), where token is the whole match including
+// braces and name is what Substitute would look up.
+func ReplacePlaceholders(text string, fn func(token, name string) string) string {
+	return placeholderRE.ReplaceAllStringFunc(text, func(match string) string {
+		return fn(match, placeholderRE.FindStringSubmatch(match)[1])
+	})
 }

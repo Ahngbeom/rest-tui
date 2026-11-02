@@ -102,12 +102,8 @@ func includeFiles(body, baseDir string) (string, []string) {
 	var missing []string
 	seen := map[string]bool{}
 	for i, line := range lines {
-		rest, ok := strings.CutPrefix(strings.TrimLeft(line, " \t"), "<")
-		if !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
-			continue
-		}
-		path := strings.TrimSpace(rest)
-		if path == "" {
+		path, ok := includePath(line)
+		if !ok {
 			continue
 		}
 		full := path
@@ -131,4 +127,24 @@ func includeFiles(body, baseDir string) (string, []string) {
 		lines[i] = content
 	}
 	return strings.Join(lines, "\n"), missing
+}
+
+// IncludePaths returns the path of every `< path` line in body, in order.
+func IncludePaths(body string) []string {
+	var paths []string
+	for _, line := range strings.Split(body, "\n") {
+		if path, ok := includePath(line); ok {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func includePath(line string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimLeft(line, " \t"), "<")
+	if !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+		return "", false
+	}
+	path := strings.TrimSpace(rest)
+	return path, path != ""
 }
