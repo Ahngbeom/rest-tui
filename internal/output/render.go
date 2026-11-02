@@ -22,22 +22,48 @@ type Options struct {
 	Color bool
 }
 
-// RenderResponse formats resp as "status (duration)", followed by headers
-// sorted by name, followed by the body (pretty-printed if it is valid JSON,
-// passed through unchanged otherwise). Sections with nothing to show are
-// omitted.
+// RenderResponse formats resp as one "redirected: <hop>" line per followed
+// redirect (if any), then "status (duration)", followed by headers sorted by
+// name, followed by the body (pretty-printed if it is valid JSON). Sections
+// with nothing to show are omitted.
 func RenderResponse(resp *executor.Response, opts Options) string {
-	sections := []string{fmt.Sprintf("%s (%s)", resp.Status, resp.Duration.Round(time.Millisecond))}
+	var sections []string
+	if len(resp.Redirects) > 0 {
+		hops := make([]string, len(resp.Redirects))
+		for i, hop := range resp.Redirects {
+			hops[i] = "redirected: " + Sanitize(hop)
+		}
+		sections = append(sections, strings.Join(hops, "\n"))
+	}
+	sections = append(sections, fmt.Sprintf("%s (%s)", Sanitize(resp.Status), resp.Duration.Round(time.Millisecond)))
 
 	if headerLines := renderHeaders(resp.Headers); headerLines != "" {
 		sections = append(sections, headerLines)
 	}
 
-	if bodySection := renderBody(resp.Body, opts); bodySection != "" {
+	var bodySection string
+	if ct := contentType(resp.Headers); IsBinary(resp.Body, ct) {
+		if ct == "" {
+			ct = "unknown"
+		}
+		bodySection = fmt.Sprintf("(binary body: %d bytes, %s)", len(resp.Body), Sanitize(ct))
+	} else {
+		bodySection = renderBody([]byte(Sanitize(string(resp.Body))), opts)
+	}
+	if bodySection != "" {
 		sections = append(sections, bodySection)
 	}
 
 	return strings.Join(sections, "\n\n")
+}
+
+func contentType(headers []httpfile.Header) string {
+	for _, h := range headers {
+		if strings.EqualFold(h.Name, "Content-Type") {
+			return h.Value
+		}
+	}
+	return ""
 }
 
 func renderHeaders(headers []httpfile.Header) string {
@@ -50,7 +76,7 @@ func renderHeaders(headers []httpfile.Header) string {
 
 	lines := make([]string, len(sorted))
 	for i, h := range sorted {
-		lines[i] = h.Name + ": " + h.Value
+		lines[i] = Sanitize(h.Name) + ": " + Sanitize(h.Value)
 	}
 	return strings.Join(lines, "\n")
 }

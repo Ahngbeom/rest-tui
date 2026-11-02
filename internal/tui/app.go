@@ -5,9 +5,13 @@
 package tui
 
 import (
+	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -20,6 +24,8 @@ const (
 	headerHeight = 1
 	footerHeight = 1
 )
+
+const quitConfirmMsg = "request in flight — press q again to quit"
 
 type screen int
 
@@ -36,33 +42,77 @@ type App struct {
 	screen        screen
 	width, height int
 
-	browser    browserModel
-	request    requestModel
-	history    historyModel
-	dirHistory dirHistoryModel
+	browser       browserModel
+	request       requestModel
+	requestOrigin screen
+	history       historyModel
+	dirHistory    dirHistoryModel
 
 	store    *history.Store
 	dirStore *dirhistory.Store
 	root     string
+	lastEnv  string
+	opts     Options
 
-	showHelp  bool
-	statusMsg string
+	showHelp     bool
+	helpViewport viewport.Model
+	statusMsg    string
+	quitArmed    bool
+}
+
+// Options configures behavior that comes from the command line.
+type Options struct {
+	// Timeout bounds each request; zero means defaultRequestTimeout.
+	Timeout time.Duration
 }
 
 // NewApp builds the root model. root is the directory .http files are
 // discovered under; store is where executed requests are recorded; dirStore
 // is where directories passed via -dir are recorded, so they can be browsed
 // and switched to later from the Directory History screen.
-func NewApp(root string, store *history.Store, dirStore *dirhistory.Store) App {
-	a := App{root: root, store: store, dirStore: dirStore}
+func NewApp(root string, store *history.Store, dirStore *dirhistory.Store, opts Options) App {
+	a := App{root: root, store: store, dirStore: dirStore, opts: opts}
 	// Recording failures (e.g. an unwritable config dir) shouldn't stop the
 	// app from starting -- directory history is a convenience, not core
 	// functionality.
-	_, _ = dirStore.Touch(root)
-	a.browser = newBrowserModel(root, store)
-	a.request = newRequestModel("", &httpfile.File{}, httpfile.Request{}, store)
+	if isDir(root) {
+		_, _ = dirStore.Touch(root)
+	}
+	a.request = newRequestModel("", "", &httpfile.File{}, httpfile.Request{}, store, "")
 	a.history = newHistoryModel(store)
 	a.dirHistory = newDirHistoryModel(dirStore)
+	a.helpViewport = viewport.New(0, 0)
+	a.helpViewport.SetContent(strings.Join(helpLines(), "\n"))
+	return a.replaceBrowser(newBrowserModel(root, store))
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// replaceBrowser swaps in b, moving its scan notice into the status line in
+// place of the previous browser's.
+func (a App) replaceBrowser(b browserModel) App {
+	if a.browser.scanNotice != "" && a.statusMsg == a.browser.scanNotice {
+		a.statusMsg = ""
+	}
+	a.browser = b
+	if b.scanNotice != "" {
+		a.statusMsg = b.scanNotice
+	}
+	return a.resize()
+}
+
+// openRequestView makes m the active Request view, applying the app-wide
+// request timeout and the current content size.
+func (a App) openRequestView(m requestModel, origin screen) App {
+	if a.request.isSending() && a.request.cancel != nil {
+		a.request.cancel()
+	}
+	a.requestOrigin = origin
+	a.request = m.withTimeout(a.opts.Timeout).SetSize(a.width, a.contentHeight())
+	a.screen = screenRequest
 	return a
 }
 
@@ -75,15 +125,38 @@ func (a App) Init() tea.Cmd {
 // which case single-character global shortcuts (h/d/q/?) must be routed to
 // the screen's own Update instead of being intercepted here.
 func (a App) activeScreenIsEditing() bool {
-	return a.screen == screenRequest && a.request.isEditing()
+	switch a.screen {
+	case screenRequest:
+		return a.request.isEditing()
+	case screenBrowser:
+		return a.browser.isFiltering()
+	case screenHistory:
+		return a.history.isFiltering()
+	case screenDirHistory:
+		return a.dirHistory.isFiltering() || a.dirHistory.isPrompting()
+	}
+	return false
 }
 
 func (a App) contentHeight() int {
 	h := a.height - headerHeight - footerHeight
-	if h < 0 {
-		h = 0
+	if a.statusMsg != "" {
+		h--
 	}
-	return h
+	return max(0, h)
+}
+
+func (a App) resize() App {
+	ch := a.contentHeight()
+	a.browser = a.browser.SetSize(a.width, ch)
+	a.request = a.request.SetSize(a.width, ch)
+	a.history = a.history.SetSize(a.width, ch)
+	a.dirHistory = a.dirHistory.SetSize(a.width, ch)
+	w := max(0, a.width-paneFocusedStyle.GetHorizontalFrameSize())
+	a.helpViewport.Width = w
+	a.helpViewport.Height = max(0, ch-paneFocusedStyle.GetVerticalFrameSize())
+	a.helpViewport.SetContent(wrapToWidth(strings.Join(helpLines(), "\n"), w))
+	return a
 }
 
 // applyStoreWarning copies any newly-detected history or directory-history
@@ -92,11 +165,18 @@ func (a App) contentHeight() int {
 // actually reads the file, so this is checked here rather than once at
 // startup.
 func (a App) applyStoreWarning() App {
+	if a.quitArmed {
+		return a
+	}
+	prev := a.statusMsg
 	if w := a.store.Warning(); w != "" {
 		a.statusMsg = w
 	}
 	if w := a.dirStore.Warning(); w != "" {
 		a.statusMsg = w
+	}
+	if a.statusMsg != prev {
+		a = a.resize()
 	}
 	return a
 }
@@ -105,20 +185,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
-		ch := a.contentHeight()
-		a.browser = a.browser.SetSize(msg.Width, ch)
-		a.request = a.request.SetSize(msg.Width, ch)
-		a.history = a.history.SetSize(msg.Width, ch)
-		a.dirHistory = a.dirHistory.SetSize(msg.Width, ch)
-		return a, nil
+		return a.resize(), nil
 
 	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			return a, tea.Quit
+		}
+		if msg.String() != "q" || a.activeScreenIsEditing() {
+			a = a.disarmQuit()
+		}
+		if a.showHelp {
+			return a.updateHelp(msg)
+		}
 		if !a.activeScreenIsEditing() {
 			switch {
 			case key.Matches(msg, keys.Quit):
-				return a, tea.Quit
+				return a.handleQuit(msg)
 			case key.Matches(msg, keys.Help):
-				a.showHelp = !a.showHelp
+				a.showHelp = true
+				a.helpViewport.GotoTop()
 				return a, nil
 			case key.Matches(msg, keys.ToggleLog):
 				a.screen = screenHistory
@@ -128,26 +213,47 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.screen = screenDirHistory
 				a.dirHistory = a.dirHistory.refresh()
 				return a.applyStoreWarning(), nil
+			case a.screen == screenBrowser && key.Matches(msg, keys.Rescan):
+				return a.replaceBrowser(a.browser.rescan()), nil
+			case a.screen == screenBrowser && key.Matches(msg, keys.OpenPath):
+				a.screen = screenDirHistory
+				a.dirHistory = a.dirHistory.refresh()
+				var cmd tea.Cmd
+				a.dirHistory, cmd = a.dirHistory.startPrompt()
+				return a.applyStoreWarning(), cmd
 			}
 		}
 
+	case execResultMsg, spinner.TickMsg:
+		var cmd tea.Cmd
+		a.request, cmd = a.request.Update(msg)
+		if !a.request.isSending() {
+			a = a.disarmQuit()
+		}
+		return a.applyStoreWarning(), cmd
+
 	case openRequestMsg:
-		a.request = newRequestModel(msg.filePath, msg.file, msg.req, a.store)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
-		return a, nil
+		return a.openRequestView(newRequestModel(msg.filePath, a.root, msg.file, msg.req, a.store, a.lastEnv), screenBrowser), nil
 
 	case rerunMsg:
+		a = a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store), screenHistory)
 		var cmd tea.Cmd
-		a.request, cmd = newRequestModelFromEntry(msg.entry, a.store)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
+		a.request, cmd = a.request.startSend()
 		return a, cmd
 
 	case openRequestFromEntryMsg:
-		a.request = newRequestModelFromEntryNoSend(msg.entry, a.store)
-		a.request = a.request.SetSize(a.width, a.contentHeight())
-		a.screen = screenRequest
+		return a.openRequestView(newRequestModelFromEntryNoSend(msg.entry, a.store), screenBrowser), nil
+
+	case backFromRequestMsg:
+		if a.requestOrigin == screenHistory {
+			a.screen = screenHistory
+			a.history = a.history.refresh()
+			return a.applyStoreWarning(), nil
+		}
+		a.screen = screenBrowser
+		if a.browser.parsedFile == nil {
+			a.browser = a.browser.refreshRecent()
+		}
 		return a, nil
 
 	case backToBrowserMsg:
@@ -163,10 +269,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.applyStoreWarning(), nil
 
 	case switchDirMsg:
+		a.dirHistory = a.dirHistory.closePrompt()
 		a.root = msg.path
-		_, _ = a.dirStore.Touch(msg.path)
-		a.browser = newBrowserModel(msg.path, a.store)
-		a.browser = a.browser.SetSize(a.width, a.contentHeight())
+		if isDir(msg.path) {
+			_, _ = a.dirStore.Touch(msg.path)
+		}
+		a = a.replaceBrowser(newBrowserModel(msg.path, a.store))
 		a.screen = screenBrowser
 		return a.applyStoreWarning(), nil
 	}
@@ -176,7 +284,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenBrowser:
 		a.browser, cmd = a.browser.Update(msg)
 	case screenRequest:
+		before := a.request.currentEnv()
 		a.request, cmd = a.request.Update(msg)
+		if env := a.request.currentEnv(); env != "" && env != before {
+			a.lastEnv = env
+		}
 	case screenHistory:
 		a.history, cmd = a.history.Update(msg)
 	case screenDirHistory:
@@ -185,9 +297,44 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a.applyStoreWarning(), cmd
 }
 
+func (a App) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Help), msg.Type == tea.KeyEsc:
+		a.showHelp = false
+	case key.Matches(msg, keys.Quit):
+		return a.handleQuit(msg)
+	case key.Matches(msg, keys.Up):
+		a.helpViewport.ScrollUp(1)
+	case key.Matches(msg, keys.Down):
+		a.helpViewport.ScrollDown(1)
+	}
+	return a, nil
+}
+
+func (a App) handleQuit(msg tea.KeyMsg) (App, tea.Cmd) {
+	if msg.String() == "q" && a.request.isSending() && !a.quitArmed {
+		a.quitArmed = true
+		a.statusMsg = quitConfirmMsg
+		return a.resize(), nil
+	}
+	return a, tea.Quit
+}
+
+func (a App) disarmQuit() App {
+	a.quitArmed = false
+	if a.statusMsg == quitConfirmMsg {
+		a.statusMsg = ""
+		a = a.resize()
+	}
+	return a
+}
+
 func (a App) breadcrumb() string {
 	switch a.screen {
 	case screenRequest:
+		if a.requestOrigin == screenHistory {
+			return "rest-tui › History › rerun"
+		}
 		return "rest-tui › Browser › " + a.request.title()
 	case screenHistory:
 		if a.history.mode == historyModeDetail {
@@ -201,32 +348,54 @@ func (a App) breadcrumb() string {
 	}
 }
 
-func (a App) footerHints() string {
+func (a App) footerHints() []hint {
+	tail := []hint{{"?", "help"}, {"q", "quit"}}
+	if a.showHelp {
+		return append([]hint{{"↑/↓", "scroll"}, {"esc", "close"}}, tail...)
+	}
 	switch a.screen {
 	case screenRequest:
 		if a.request.isEditing() {
-			return "ctrl+s apply  esc cancel"
+			return []hint{{"ctrl+s", "apply"}, {"esc", "cancel"}}
 		}
-		return "e cycle env  enter/ctrl+r send  ↑/↓ scroll  c copy  i edit  esc back  h history  d dirs  ? help  q quit"
+		var hints []hint
+		if a.request.canCycleEnv() {
+			hints = append(hints, hint{"e", "cycle env"})
+		}
+		if a.request.canSend() {
+			hints = append(hints, hint{"enter/ctrl+r", "send"})
+		}
+		esc := hint{"esc", "back"}
+		if a.request.isSending() {
+			esc = hint{"esc", "cancel"}
+		}
+		hints = append(hints, hint{"↑/↓", "scroll"}, hint{"g/G", "top/bottom"}, hint{"c", "copy"}, hint{"i", "edit"}, esc, hint{"h", "history"}, hint{"d", "dirs"})
+		return append(hints, tail...)
 	case screenHistory:
-		if a.history.mode == historyModeDetail {
-			return "↑/↓ scroll  r rerun  c copy  esc back  ? help  q quit"
+		if a.history.pendingRerun != nil {
+			return append([]hint{{"y", "rerun"}, {"n", "cancel"}}, tail...)
 		}
-		return "↑/↓ move  enter detail  r rerun  esc back  ? help  q quit"
+		if a.history.mode == historyModeDetail {
+			return append([]hint{{"↑/↓", "scroll"}, {"r", "rerun"}, {"c", "copy"}, {"esc", "back"}}, tail...)
+		}
+		return append([]hint{{"↑/↓", "move"}, {"enter", "detail"}, {"r", "rerun"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	case screenDirHistory:
-		return "↑/↓ move  enter switch  esc back  ? help  q quit"
+		if a.dirHistory.isPrompting() {
+			return append([]hint{{"enter", "open"}, {"esc", "cancel"}}, tail...)
+		}
+		return append([]hint{{"o", "open path"}, {"↑/↓", "move"}, {"enter", "switch"}, {"/", "filter"}, {"esc", "back"}}, tail...)
 	default:
 		if a.browser.focus == paneRequests {
-			return "↑/↓ move  enter run  tab← files  esc back  h history  d dirs  ? help  q quit"
+			return append([]hint{{"↑/↓", "move"}, {"enter", "run"}, {"/", "filter"}, {"tab", "← files"}, {"esc", "back"}, {"R", "rescan"}, {"o", "open path"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 		}
-		return "↑/↓ move  enter open  tab→ requests  h history  d dirs  ? help  q quit"
+		return append([]hint{{"↑/↓", "move"}, {"enter", "open"}, {"/", "filter"}, {"tab", "→ requests"}, {"R", "rescan"}, {"o", "open path"}, {"h", "history"}, {"d", "dirs"}}, tail...)
 	}
 }
 
-func (a App) helpView() string {
-	lines := []string{
+func helpLines() []string {
+	return []string{
 		"Global",
-		"  q, ctrl+c     quit",
+		"  q, ctrl+c     quit (q twice while a request is in flight)",
 		"  h             jump to History",
 		"  d             jump to Directory History",
 		"  ?             toggle this help",
@@ -236,28 +405,39 @@ func (a App) helpView() string {
 		"  ↑/↓, j/k      move selection",
 		"  tab           switch files/requests pane",
 		"  enter         open file / run request",
+		"  /             filter list (esc clears)",
+		"  R             rescan directory",
+		"  o             open a directory by path",
 		"",
 		"Request view",
 		"  e             cycle environment",
 		"  enter, ctrl+r send request",
 		"  ↑/↓           scroll response",
+		"  g/G, home/end top / bottom of response",
 		"  c, y          copy request/response",
 		"  i             edit request (method/URL/headers/body)",
+		"  esc           cancel send (while sending) / back to Browser or History",
 		"  ctrl+s, esc   apply / cancel edit (while editing)",
 		"",
 		"History",
 		"  enter         view detail",
-		"  r             rerun",
+		"  r             rerun (asks y/n unless GET/HEAD/OPTIONS)",
+		"  /             filter list (esc clears)",
 		"  c, y          copy request/response (detail view)",
 		"",
 		"Directory History",
 		"  enter         switch to selected directory",
+		"  o             open a directory by path (~ ok)",
+		"  /             filter list (esc clears)",
 	}
-	return paneFocusedStyle.Render(strings.Join(lines, "\n"))
+}
+
+func (a App) helpView() string {
+	return paneFocusedStyle.Width(max(0, a.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(a.helpViewport.View())
 }
 
 func (a App) View() string {
-	header := headerStyle.Render(a.breadcrumb())
+	header := headerStyle.Render(truncateLine(a.breadcrumb(), a.width-headerStyle.GetHorizontalPadding()))
 
 	var body string
 	switch {
@@ -273,9 +453,9 @@ func (a App) View() string {
 		body = a.browser.View()
 	}
 
-	footer := footerStyle.Render(a.footerHints())
+	footer := footerStyle.Render(renderHints(a.footerHints(), a.width-footerStyle.GetHorizontalPadding()))
 	if a.statusMsg != "" {
-		footer = statusStyle.Render(a.statusMsg) + "\n" + footer
+		footer = statusStyle.Render(truncateLine(a.statusMsg, a.width-statusStyle.GetHorizontalPadding())) + "\n" + footer
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)

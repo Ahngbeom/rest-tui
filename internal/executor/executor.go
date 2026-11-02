@@ -5,6 +5,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -19,6 +21,8 @@ type Response struct {
 	Headers    []httpfile.Header
 	Body       []byte
 	Duration   time.Duration
+	// Redirects lists followed hops as "<status> → <METHOD> <URL>"; nil if none.
+	Redirects []string
 }
 
 // Execute sends req and waits up to timeout for a response. req.Method,
@@ -41,18 +45,27 @@ func Execute(ctx context.Context, req httpfile.Request, timeout time.Duration) (
 		httpReq.Header.Add(h.Name, h.Value)
 	}
 
-	client := &http.Client{}
+	var redirects []string
+	client := &http.Client{
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			redirects = append(redirects, fmt.Sprintf("%d → %s %s", next.Response.StatusCode, next.Method, next.URL.String()))
+			return nil
+		},
+	}
 	start := time.Now()
 	httpResp, err := client.Do(httpReq)
 	duration := time.Since(start)
 	if err != nil {
-		return nil, err
+		return nil, keepCtxCause(ctx, err)
 	}
 	defer httpResp.Body.Close()
 
 	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, err
+		return nil, keepCtxCause(ctx, err)
 	}
 
 	var headers []httpfile.Header
@@ -68,5 +81,16 @@ func Execute(ctx context.Context, req httpfile.Request, timeout time.Duration) (
 		Headers:    headers,
 		Body:       respBody,
 		Duration:   duration,
+		Redirects:  redirects,
 	}, nil
+}
+
+// keepCtxCause makes errors.Is(err, context.Canceled/DeadlineExceeded) hold
+// when ctx ended, even if the transport wrapped or replaced the cause.
+func keepCtxCause(ctx context.Context, err error) error {
+	cause := ctx.Err()
+	if cause == nil || errors.Is(err, cause) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", cause, err)
 }

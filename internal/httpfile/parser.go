@@ -1,6 +1,7 @@
 package httpfile
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -17,18 +18,34 @@ var knownMethods = map[string]bool{
 // still parses normally. The first recorded error (if any) is also
 // returned as err for callers that only care whether something went wrong.
 func Parse(data []byte) (*File, error) {
+	return parse(data, false)
+}
+
+// ParseVerbatimBody parses like Parse but keeps every body line as written:
+// response handlers, "<>" history links and "< path" lines stay in Body and
+// nothing is added to Unsupported. It is meant for re-parsing text whose
+// body was already resolved, such as the Request view's edit buffer.
+func ParseVerbatimBody(data []byte) (*File, error) {
+	return parse(data, true)
+}
+
+func parse(data []byte, verbatimBody bool) (*File, error) {
 	lines := strings.Split(string(data), "\n")
 
 	f := &File{Vars: map[string]string{}}
 
 	// blockStart[i] is the first line index (0-based) of block i; blocks are
 	// split on lines beginning with "###". Everything before the first "###"
-	// (or the whole file, if there is none) is block 0.
+	// (or the whole file, if there is none) is block 0. In verbatim mode the
+	// whole buffer is one block, so a "###" line inside the body stays body.
 	var blockStarts []int
 	if len(lines) > 0 && !strings.HasPrefix(strings.TrimSpace(lines[0]), "###") {
 		blockStarts = append(blockStarts, 0)
 	}
 	for i, line := range lines {
+		if verbatimBody && len(blockStarts) > 0 {
+			break
+		}
 		if strings.HasPrefix(strings.TrimSpace(line), "###") {
 			blockStarts = append(blockStarts, i)
 		}
@@ -48,7 +65,7 @@ func Parse(data []byte) (*File, error) {
 			bodyOffset++
 		}
 
-		if err := parseBlock(f, block, bodyOffset, delimiterName); err != nil {
+		if err := parseBlock(f, block, bodyOffset, delimiterName, verbatimBody); err != nil {
 			f.ParseErrors = append(f.ParseErrors, err)
 		}
 	}
@@ -65,9 +82,10 @@ func Parse(data []byte) (*File, error) {
 // lineOffset is the 0-based source line number of block[0]. On failure it
 // returns the error without touching f.Requests for this block; the caller
 // is expected to record it and move on to the next block.
-func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *ParseError {
+func parseBlock(f *File, block []string, lineOffset int, delimiterName string, verbatimBody bool) *ParseError {
 	name := delimiterName
 	var req *Request
+	var pre []string
 	i := 0
 
 	// Skip/consume leading comments, blank lines, and file-scoped @var
@@ -89,12 +107,28 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 			f.Vars[k] = v
 			continue
 		}
+		if strings.HasPrefix(trimmed, "< {%") {
+			pre = addUnique(pre, "pre-request script")
+			scriptLine := i
+			for !strings.Contains(trimmed, "%}") && i+1 < len(block) {
+				i++
+				trimmed = strings.TrimSpace(block[i])
+			}
+			if !strings.Contains(trimmed, "%}") {
+				return &ParseError{Line: lineOffset + scriptLine + 1, Msg: "unclosed pre-request script (missing %})"}
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "< ") || strings.HasPrefix(trimmed, "<\t") {
+			pre = addUnique(pre, "pre-request script: "+strings.TrimSpace(trimmed[1:]))
+			continue
+		}
 
 		method, url, ok := parseRequestLine(trimmed)
 		if !ok {
 			return &ParseError{Line: lineOffset + i + 1, Msg: "expected HTTP method and URL, got " + quote(trimmed)}
 		}
-		req = &Request{Name: name, Method: method, URL: url, Line: lineOffset + i + 1}
+		req = &Request{Name: name, Method: method, URL: url, Line: lineOffset + i + 1, Unsupported: pre}
 		i++
 		break
 	}
@@ -105,12 +139,31 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 		return nil
 	}
 
+	// Indented "?a=b" / "&c=d" continuation lines extend the URL.
+	for ; i < len(block); i++ {
+		raw := block[i]
+		if raw == "" || (raw[0] != ' ' && raw[0] != '\t') {
+			break
+		}
+		trimmed := strings.TrimSpace(raw)
+		if !strings.HasPrefix(trimmed, "?") && !strings.HasPrefix(trimmed, "&") {
+			break
+		}
+		req.URL += trimmed
+	}
+
 	// Headers: consume "Name: value" lines until a blank line or EOF.
 	for ; i < len(block); i++ {
+		if strings.HasPrefix(block[i], ">") {
+			break
+		}
 		trimmed := strings.TrimSpace(block[i])
 		if trimmed == "" {
 			i++
 			break
+		}
+		if _, ok := stripCommentPrefix(trimmed); ok || strings.HasPrefix(block[i], "<>") {
+			continue
 		}
 		name, value, ok := parseHeaderLine(trimmed)
 		if !ok {
@@ -120,12 +173,63 @@ func parseBlock(f *File, block []string, lineOffset int, delimiterName string) *
 	}
 
 	// Body: remainder of the block, trimmed of surrounding blank lines.
-	if i < len(block) {
+	if i < len(block) && verbatimBody {
 		req.Body = strings.TrimRight(strings.Join(block[i:], "\n"), "\n \t")
+	} else if i < len(block) {
+		body, unsupported := splitResponseHandlers(block[i:])
+		req.Body = strings.TrimRight(strings.Join(body, "\n"), "\n \t")
+		for _, u := range unsupported {
+			req.Unsupported = addUnique(req.Unsupported, u)
+		}
 	}
 
 	f.Requests = append(f.Requests, *req)
 	return nil
+}
+
+// splitResponseHandlers separates the request body from the trailing response
+// handler / output redirect section, which starts at the first line whose
+// column 0 is ">". Handler scripts are never run; they are only reported.
+func splitResponseHandlers(lines []string) (body []string, unsupported []string) {
+	start := len(lines)
+	for idx, l := range lines {
+		if strings.HasPrefix(l, ">") {
+			start = idx
+			break
+		}
+	}
+	for _, l := range lines[:start] {
+		if !strings.HasPrefix(l, "<>") {
+			body = append(body, l)
+		}
+	}
+	for j := start; j < len(lines); j++ {
+		l := strings.TrimSpace(lines[j])
+		switch {
+		case strings.HasPrefix(l, ">>!"):
+			unsupported = addUnique(unsupported, "output redirect: "+strings.TrimSpace(l[3:]))
+		case strings.HasPrefix(l, ">>"):
+			unsupported = addUnique(unsupported, "output redirect: "+strings.TrimSpace(l[2:]))
+		case strings.HasPrefix(l, "> {%"):
+			unsupported = addUnique(unsupported, "response handler script")
+			for !strings.Contains(l, "%}") && j+1 < len(lines) {
+				j++
+				l = lines[j]
+			}
+		case strings.HasPrefix(l, ">"):
+			unsupported = addUnique(unsupported, "response handler script: "+strings.TrimSpace(l[1:]))
+		}
+	}
+	return body, unsupported
+}
+
+func addUnique(list []string, s string) []string {
+	for _, v := range list {
+		if v == s {
+			return list
+		}
+	}
+	return append(list, s)
 }
 
 // stripCommentPrefix reports whether line is a "#" or "//" comment, returning
@@ -169,18 +273,38 @@ func parseVarDecl(line string) (name, value string, ok bool) {
 	return name, value, true
 }
 
-// parseRequestLine parses "METHOD URL [HTTP-VERSION]".
+// parseRequestLine parses "[METHOD] URL [HTTP-VERSION]". The method may be
+// omitted, in which case it defaults to GET. The URL is everything between
+// the method and the version, so whitespace inside it (for example in
+// "{{$random.integer(1, 10)}}") is kept.
 func parseRequestLine(line string) (method, url string, ok bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return "", "", false
+	rest := httpVersionSuffixRe.ReplaceAllString(line, "")
+	if sp := strings.IndexAny(rest, " \t"); sp > 0 {
+		if m := strings.ToUpper(rest[:sp]); knownMethods[m] {
+			return m, strings.TrimSpace(rest[sp:]), true
+		}
 	}
-	method = strings.ToUpper(fields[0])
-	if !knownMethods[method] {
-		return "", "", false
+	url = strings.TrimSpace(rest)
+	if url != "" && looksLikeURL(url) {
+		return "GET", url, true
 	}
-	url = fields[1]
-	return method, url, true
+	return "", "", false
+}
+
+var (
+	schemeRe   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+	hostPathRe = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*(:[0-9]+)?([/?]\S*)?$`)
+
+	httpVersionSuffixRe = regexp.MustCompile(`(?i)\s+HTTP/[0-9]+(\.[0-9]+)?\s*$`)
+)
+
+// looksLikeURL reports whether s is plausibly a request target rather than a
+// stray word or a "Name:value" header.
+func looksLikeURL(s string) bool {
+	if schemeRe.MatchString(s) || strings.HasPrefix(s, "{{") {
+		return true
+	}
+	return hostPathRe.MatchString(s) && strings.ContainsAny(s, ".:/")
 }
 
 // parseHeaderLine parses "Name: value".

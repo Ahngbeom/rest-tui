@@ -4,26 +4,31 @@
 package env
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 )
 
 const (
-	publicFileName  = "http-client.env.json"
-	privateFileName = "http-client.private.env.json"
+	PublicFileName  = "http-client.env.json"
+	PrivateFileName = "http-client.private.env.json"
+
+	// SharedEnvName is the pseudo-environment whose values sit under every real one.
+	SharedEnvName = "$shared"
 )
 
 // LoadFiles reads the public and private environment files from dir. A
 // missing file yields a nil map for that side, not an error.
 func LoadFiles(dir string) (public, private map[string]map[string]string, err error) {
-	public, err = loadOne(filepath.Join(dir, publicFileName))
+	public, err = loadOne(filepath.Join(dir, PublicFileName))
 	if err != nil {
 		return nil, nil, err
 	}
-	private, err = loadOne(filepath.Join(dir, privateFileName))
+	private, err = loadOne(filepath.Join(dir, PrivateFileName))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,31 +43,60 @@ func loadOne(path string) (map[string]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var envs map[string]map[string]string
-	if err := json.Unmarshal(data, &envs); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	envs := map[string]map[string]string{}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return envs, nil
+	}
+	// UseNumber keeps large integers exact; decoding into float64 would rewrite them.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw map[string]any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	for name, v := range raw {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		vars := map[string]string{}
+		for k, val := range obj {
+			switch x := val.(type) {
+			case string:
+				vars[k] = x
+			case json.Number:
+				vars[k] = x.String()
+			case bool:
+				vars[k] = strconv.FormatBool(x)
+			}
+		}
+		envs[name] = vars
 	}
 	return envs, nil
 }
 
 // Merge resolves the final variable map for envName using precedence
-// (highest first): fileVars, private[envName], public[envName].
+// (highest first): fileVars, private[envName], public[envName],
+// private[$shared], public[$shared]. The $shared layers apply even when
+// envName is empty.
 func Merge(public, private map[string]map[string]string, envName string, fileVars map[string]string) map[string]string {
 	result := map[string]string{}
-	for k, v := range public[envName] {
-		result[k] = v
-	}
-	for k, v := range private[envName] {
-		result[k] = v
-	}
-	for k, v := range fileVars {
-		result[k] = v
+	for _, layer := range []map[string]string{
+		public[SharedEnvName],
+		private[SharedEnvName],
+		public[envName],
+		private[envName],
+		fileVars,
+	} {
+		for k, v := range layer {
+			result[k] = v
+		}
 	}
 	return result
 }
 
 // EnvNames returns the sorted union of environment names declared in public
-// and private.
+// and private, excluding the $shared pseudo-environment.
 func EnvNames(public, private map[string]map[string]string) []string {
 	seen := map[string]bool{}
 	for name := range public {
@@ -71,6 +105,7 @@ func EnvNames(public, private map[string]map[string]string) []string {
 	for name := range private {
 		seen[name] = true
 	}
+	delete(seen, SharedEnvName)
 	names := make([]string, 0, len(seen))
 	for name := range seen {
 		names = append(names, name)

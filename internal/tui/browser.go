@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,18 +11,27 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/history"
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
+	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
 // discoverHTTPFiles recursively finds *.http files under root and returns
-// their paths relative to root, sorted.
-func discoverHTTPFiles(root string) ([]string, error) {
-	var found []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// their paths relative to root, sorted. Unreadable subdirectories are skipped
+// and counted; only a failure on root itself is an error.
+func discoverHTTPFiles(root string) (rels []string, skipped int, err error) {
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if path == root {
+				return err
+			}
+			skipped++
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -31,15 +41,15 @@ func discoverHTTPFiles(root string) ([]string, error) {
 			if relErr != nil {
 				rel = path
 			}
-			found = append(found, rel)
+			rels = append(rels, rel)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	sort.Strings(found)
-	return found, nil
+	sort.Strings(rels)
+	return rels, skipped, nil
 }
 
 type fileItem struct {
@@ -54,7 +64,9 @@ type requestItem struct {
 	req httpfile.Request
 }
 
-func (r requestItem) FilterValue() string { return r.req.Name }
+func (r requestItem) FilterValue() string {
+	return r.req.Name + " " + r.req.Method + " " + r.req.URL
+}
 
 func (r requestItem) Title() string {
 	if r.req.Name != "" {
@@ -96,23 +108,33 @@ type browserModel struct {
 	// has even been selected.
 	rootErr error
 
+	// scanNotice reports a partially successful scan (unreadable
+	// subdirectories were skipped); the App shows it in the status line.
+	scanNotice string
+
 	width, height int
 }
 
 func newBrowserModel(root string, store *history.Store) browserModel {
-	files := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	fileDelegate := list.NewDefaultDelegate()
+	fileDelegate.ShowDescription = false
+	fileDelegate.SetSpacing(0)
+	files := list.New(nil, fileDelegate, 0, 0)
 	files.Title = "HTTP Files"
 	files.SetShowHelp(false)
-	files.SetFilteringEnabled(false)
+	files.SetFilteringEnabled(true)
 
 	requests := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	requests.Title = "Requests"
 	requests.SetShowHelp(false)
-	requests.SetFilteringEnabled(false)
+	requests.SetFilteringEnabled(true)
 
 	m := browserModel{root: root, store: store, files: files, requests: requests}
 
-	if rels, err := discoverHTTPFiles(root); err == nil {
+	if rels, skipped, err := discoverHTTPFiles(root); err == nil {
+		if skipped > 0 {
+			m.scanNotice = fmt.Sprintf("skipped %d unreadable dirs", skipped)
+		}
 		items := make([]list.Item, len(rels))
 		for i, rel := range rels {
 			items[i] = fileItem{rel: rel}
@@ -143,8 +165,56 @@ func (m browserModel) refreshRecent() browserModel {
 		items[i] = entryItem{entry: e}
 	}
 	m.requests.Title = "Recent"
+	m.requests.SetDelegate(entryRowDelegate{})
+	m.requests.ResetFilter()
 	m.requests.SetItems(items)
+	m.requests.Select(0)
 	return m
+}
+
+// rescan rebuilds the browser from disk, keeping the cursor, the open file
+// and the focused pane where they were when those still exist. A filter is
+// not carried over.
+func (m browserModel) rescan() browserModel {
+	filesRel := ""
+	if it, ok := m.files.SelectedItem().(fileItem); ok {
+		filesRel = it.rel
+	}
+	openRel := ""
+	if m.parsedFile != nil {
+		if rel, err := filepath.Rel(m.root, m.selectedFile); err == nil {
+			openRel = rel
+		}
+	}
+	reqIdx, focus := m.requests.Index(), m.focus
+
+	n := newBrowserModel(m.root, m.store).SetSize(m.width, m.height)
+	indexOf := func(rel string) int {
+		for i, it := range n.files.Items() {
+			if f, ok := it.(fileItem); ok && f.rel == rel {
+				return i
+			}
+		}
+		return -1
+	}
+	if openRel != "" {
+		if i := indexOf(openRel); i >= 0 {
+			n.files.Select(i)
+			n = n.selectFile()
+			if len(n.requests.Items()) == 0 {
+				n.focus = paneFiles
+				return n
+			}
+			n.requests.Select(min(reqIdx, len(n.requests.Items())-1))
+			n.focus = focus
+			return n
+		}
+	}
+	if i := indexOf(filesRel); i >= 0 {
+		n.files.Select(i)
+	}
+	n.focus = paneFiles
+	return n
 }
 
 func (m browserModel) Init() tea.Cmd {
@@ -153,11 +223,33 @@ func (m browserModel) Init() tea.Cmd {
 
 func (m browserModel) SetSize(width, height int) browserModel {
 	m.width, m.height = width, height
-	half := width / 2
-	// Account for the rounded-border pane frame (2 cols/rows each side).
-	m.files.SetSize(half-4, height-2)
-	m.requests.SetSize(width-half-4, height-2)
+	filesW, reqW := m.paneWidths()
+	frameW, frameH := paneStyle.GetHorizontalFrameSize(), paneStyle.GetVerticalFrameSize()
+	m.files.SetSize(max(0, filesW-frameW), max(0, height-frameH))
+
+	warnRows := 0
+	if lines := m.parseWarningLines(max(0, reqW-frameW)); len(lines) > 0 {
+		warnRows = len(lines) + 1
+	}
+	m.requests.SetSize(max(0, reqW-frameW), max(0, height-frameH-warnRows))
 	return m
+}
+
+func (m browserModel) paneWidths() (filesW, reqW int) {
+	filesW = m.width * 40 / 100
+	return filesW, m.width - filesW
+}
+
+func (m browserModel) parseWarningLines(width int) []string {
+	if m.parsedFile == nil || len(m.parsedFile.ParseErrors) == 0 {
+		return nil
+	}
+	text := "parse warning: " + joinParseErrors(m.parsedFile.ParseErrors)
+	lines := strings.Split(ansi.Wrap(text, width, ""), "\n")
+	if len(lines) <= 3 {
+		return lines
+	}
+	return []string{lines[0], lines[1], fmt.Sprintf("… +%d more", len(lines)-2)}
 }
 
 // selectFile parses the currently highlighted file in the files pane and, on
@@ -170,6 +262,8 @@ func (m browserModel) selectFile() browserModel {
 	if !ok {
 		return m
 	}
+	m.requests.SetDelegate(list.NewDefaultDelegate())
+	m.requests.ResetFilter()
 	m.requests.Title = "Requests" // selecting a file always replaces any Recent list
 
 	full := filepath.Join(m.root, item.rel)
@@ -180,7 +274,8 @@ func (m browserModel) selectFile() browserModel {
 		m.parseErr = err
 		m.parsedFile = nil
 		m.requests.SetItems(nil)
-		return m
+		m.requests.Select(0)
+		return m.SetSize(m.width, m.height)
 	}
 
 	f, parseErr := httpfile.Parse(data)
@@ -189,12 +284,13 @@ func (m browserModel) selectFile() browserModel {
 		items[i] = requestItem{req: r}
 	}
 	m.requests.SetItems(items)
+	m.requests.Select(0)
 
 	if len(f.Requests) == 0 && parseErr != nil {
 		// Every block failed to parse: nothing to show.
 		m.parseErr = parseErr
 		m.parsedFile = nil
-		return m
+		return m.SetSize(m.width, m.height)
 	}
 
 	// Either some/all requests parsed, or the file legitimately has none
@@ -203,14 +299,38 @@ func (m browserModel) selectFile() browserModel {
 	m.parseErr = nil
 	m.parsedFile = f
 	m.focus = paneRequests
-	return m
+	return m.SetSize(m.width, m.height)
+}
+
+// listCapturesKey reports whether l's built-in filter handling must see msg
+// before the screen's own bindings: every key while the filter input is
+// active, and esc once a filter is applied (it clears the filter).
+func listCapturesKey(l list.Model, msg tea.KeyMsg) bool {
+	switch l.FilterState() {
+	case list.Filtering:
+		return true
+	case list.FilterApplied:
+		return msg.Type == tea.KeyEsc
+	}
+	return false
+}
+
+func (m browserModel) focusedList() list.Model {
+	if m.focus == paneFiles {
+		return m.files
+	}
+	return m.requests
+}
+
+func (m browserModel) isFiltering() bool {
+	return m.focusedList().FilterState() == list.Filtering
 }
 
 func (m browserModel) Update(msg tea.Msg) (browserModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && !listCapturesKey(m.focusedList(), keyMsg) {
 		switch {
 		case key.Matches(keyMsg, keys.Tab):
-			if m.focus == paneFiles && (m.parsedFile != nil || len(m.requests.Items()) > 0) {
+			if m.focus == paneFiles && len(m.requests.Items()) > 0 {
 				m.focus = paneRequests
 			} else {
 				m.focus = paneFiles
@@ -276,24 +396,47 @@ func (m browserModel) View() string {
 		requestsPane = browserActivePaneStyle
 	}
 
+	filesW, reqW := m.paneWidths()
+	frameW, frameH := paneStyle.GetHorizontalFrameSize(), paneStyle.GetVerticalFrameSize()
+	borderW, borderH := paneStyle.GetHorizontalBorderSize(), paneStyle.GetVerticalBorderSize()
+	innerH := max(0, m.height-frameH)
+
 	left := files.View()
 	if m.rootErr != nil {
-		left = errorTextStyle.Render("cannot scan directory:\n" + m.rootErr.Error())
+		left = errorTextStyle.Render(fitLines("cannot scan directory:\n"+m.rootErr.Error(), max(0, filesW-frameW), innerH))
+	}
+
+	if m.rootErr == nil && len(m.files.Items()) == 0 {
+		left = emptyPane(files, "No .http files under "+output.Sanitize(m.root)+" — d recent dirs · o open path", max(0, filesW-frameW), innerH)
 	}
 
 	right := requests.View()
 	switch {
+	case m.parsedFile == nil && m.parseErr == nil && len(m.requests.Items()) == 0:
+		right = emptyPane(requests, "Select a file and press enter", max(0, reqW-frameW), innerH)
 	case m.parseErr != nil:
-		right = errorTextStyle.Render("parse error:\n" + m.parseErr.Error())
-	case m.parsedFile != nil && len(m.parsedFile.ParseErrors) > 0:
-		right = errorTextStyle.Render("parse warning: "+joinParseErrors(m.parsedFile.ParseErrors)) + "\n\n" + right
+		right = errorTextStyle.Render(fitLines("parse error:\n"+m.parseErr.Error(), max(0, reqW-frameW), innerH))
+	default:
+		if lines := m.parseWarningLines(max(0, reqW-frameW)); len(lines) > 0 {
+			for i, ln := range lines {
+				lines[i] = errorTextStyle.Render(ln)
+			}
+			right = strings.Join(lines, "\n") + "\n\n" + right
+		}
 	}
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		filesPane.Render(left),
-		requestsPane.Render(right),
+		filesPane.Width(max(0, filesW-borderW)).Height(max(0, m.height-borderH)).Render(left),
+		requestsPane.Width(max(0, reqW-borderW)).Height(max(0, m.height-borderH)).Render(right),
 	)
+}
+
+// emptyPane renders l's title with a muted guidance line in place of the list.
+func emptyPane(l list.Model, text string, width, height int) string {
+	title := l.Styles.TitleBar.Render(l.Styles.Title.Render(l.Title))
+	body := mutedTextStyle.Render(fitLines(text, width, max(0, height-lipgloss.Height(title))))
+	return title + "\n" + body
 }
 
 // joinParseErrors formats the blocks that failed to parse as a single

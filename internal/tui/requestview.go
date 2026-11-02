@@ -2,15 +2,22 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Ahngbeom/rest-tui/internal/env"
 	"github.com/Ahngbeom/rest-tui/internal/executor"
@@ -19,7 +26,7 @@ import (
 	"github.com/Ahngbeom/rest-tui/internal/output"
 )
 
-const requestTimeout = 30 * time.Second
+const defaultRequestTimeout = 30 * time.Second
 
 // responseFromEntry reconstructs an *executor.Response from a stored history
 // entry so it can be rendered with output.RenderResponse.
@@ -30,27 +37,44 @@ func responseFromEntry(e history.Entry) *executor.Response {
 		Headers:    e.ResponseHeaders,
 		Body:       []byte(e.ResponseBody),
 		Duration:   e.Duration,
+		Redirects:  e.Redirects,
 	}
 }
 
+var requestModelCounter atomic.Uint64
+
+func nextRequestModelID() uint64 { return requestModelCounter.Add(1) }
+
 type requestModel struct {
+	id       uint64
 	filePath string
+	root     string
 	file     *httpfile.File
 	req      httpfile.Request
 
-	envNames              []string
-	envIndex              int
-	publicEnv, privateEnv map[string]map[string]string
+	envNames  []string
+	envIndex  int
+	envSource env.Loaded
+	envErr    error
 
-	resolved    httpfile.Request
-	missingVars []string
+	resolved     httpfile.Request
+	missingVars  []string
+	blockedFlash bool
+	edited       bool
+	discardArmed bool
 
 	editing   bool
 	editor    textarea.Model
+	editSeed  string
 	editError string
 
 	executing   bool
+	spinner     spinner.Model
+	sendStarted time.Time
+	cancel      context.CancelFunc
 	lastEntry   *history.Entry
+	entryEnv    string
+	fromEntry   bool
 	historyWarn string
 
 	copyStatus string
@@ -61,26 +85,35 @@ type requestModel struct {
 	responseLineOffset int
 	width, height      int
 
-	store *history.Store
+	store   *history.Store
+	timeout time.Duration
+
+	now func() time.Time
+	rng *rand.Rand
 }
 
+func newRequestRand() *rand.Rand { return rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())) }
+
 // newRequestModel builds a Request view for a request selected in the
-// Browser, resolving {{var}} placeholders against the request's directory's
-// environment files (if any) plus the file's own @-scoped variables.
-func newRequestModel(filePath string, file *httpfile.File, req httpfile.Request, store *history.Store) requestModel {
-	m := requestModel{filePath: filePath, file: file, req: req, store: store, envIndex: -1}
+// Browser, resolving {{var}} placeholders against the env files nearest the
+// request (searching up to root) plus the file's own @-scoped variables.
+func newRequestModel(filePath, root string, file *httpfile.File, req httpfile.Request, store *history.Store, preferredEnv string) requestModel {
+	m := requestModel{id: nextRequestModelID(), filePath: filePath, root: root, file: file, req: req, store: store, envIndex: -1, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
+	m.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
 
 	if filePath != "" {
-		public, private, err := env.LoadFiles(filepath.Dir(filePath))
-		if err == nil {
-			m.publicEnv, m.privateEnv = public, private
-			m.envNames = env.EnvNames(public, private)
+		m.envSource, m.envErr = env.LoadNearest(filepath.Dir(filePath), root)
+		if m.envErr == nil {
+			m.envNames = env.EnvNames(m.envSource.Public, m.envSource.Private)
 			if len(m.envNames) > 0 {
 				m.envIndex = 0
+				if i := slices.Index(m.envNames, preferredEnv); i >= 0 {
+					m.envIndex = i
+				}
 			}
 		}
 	}
@@ -89,42 +122,21 @@ func newRequestModel(filePath string, file *httpfile.File, req httpfile.Request,
 	return m
 }
 
-// newRequestModelFromEntry builds a Request view pre-loaded with an
-// already-resolved past entry, and returns a command that re-sends it
-// immediately.
-func newRequestModelFromEntry(entry history.Entry, store *history.Store) (requestModel, tea.Cmd) {
-	req := httpfile.Request{
-		Name:    "(rerun) " + entry.Method + " " + entry.URL,
-		Method:  entry.Method,
-		URL:     entry.URL,
-		Headers: entry.RequestHeaders,
-		Body:    entry.RequestBody,
-	}
-	m := requestModel{req: req, store: store, envIndex: -1}
-	m.viewport = viewport.New(0, 0)
-	m.editor = textarea.New()
-	m.editor.ShowLineNumbers = false
-	m.editor.Prompt = ""
-	m.recompute()
-	m.executing = true
-	m.refreshContent()
-	m.scrollToResponse()
-	return m, m.sendCmd()
-}
-
 // newRequestModelFromEntryNoSend builds a Request view pre-loaded with an
-// already-resolved past entry, like newRequestModelFromEntry, but lands on
-// the screen without auto-sending. A history entry has no associated file
-// path, so no environment files are loaded (envIndex stays -1).
+// already-resolved past entry, landing on the screen without sending. A
+// history entry has no associated file path, so no environment files are
+// loaded (envIndex stays -1).
 func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) requestModel {
 	req := httpfile.Request{
 		Method:  entry.Method,
 		URL:     entry.URL,
 		Headers: entry.RequestHeaders,
 		Body:    entry.RequestBody,
+		Name:    entry.Name,
 	}
-	m := requestModel{req: req, store: store, envIndex: -1}
+	m := requestModel{id: nextRequestModelID(), req: req, store: store, envIndex: -1, entryEnv: entry.Env, fromEntry: true, now: time.Now, rng: newRequestRand()}
 	m.viewport = viewport.New(0, 0)
+	m.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	m.editor = textarea.New()
 	m.editor.ShowLineNumbers = false
 	m.editor.Prompt = ""
@@ -132,7 +144,15 @@ func newRequestModelFromEntryNoSend(entry history.Entry, store *history.Store) r
 	return m
 }
 
+// recompute rebuilds m.resolved from m.req. A history entry was resolved
+// when it was first sent, so fromEntry models keep it byte for byte: no
+// placeholder blocks the send and no dynamic value is regenerated.
 func (m *requestModel) recompute() {
+	if m.fromEntry {
+		m.resolved, m.missingVars = m.req, nil
+		m.refreshContent()
+		return
+	}
 	fileVars := map[string]string{}
 	if m.file != nil {
 		fileVars = m.file.Vars
@@ -141,9 +161,17 @@ func (m *requestModel) recompute() {
 	if m.envIndex >= 0 && m.envIndex < len(m.envNames) {
 		envName = m.envNames[m.envIndex]
 	}
-	vars := env.Merge(m.publicEnv, m.privateEnv, envName, fileVars)
-	m.resolved, m.missingVars = env.ResolveRequest(m.req, vars)
+	vars := env.Merge(m.envSource.Public, m.envSource.Private, envName, fileVars)
+	m.resolved, m.missingVars = env.ResolveRequest(m.req, vars, m.resolveOptions())
 	m.refreshContent()
+}
+
+func (m requestModel) resolveOptions() env.ResolveOptions {
+	baseDir := ""
+	if m.filePath != "" {
+		baseDir = filepath.Dir(m.filePath)
+	}
+	return env.ResolveOptions{BaseDir: baseDir, Now: m.now(), Rand: m.rng}
 }
 
 func (m *requestModel) refreshContent() {
@@ -163,22 +191,12 @@ func (m *requestModel) scrollToResponse() {
 
 func (m requestModel) SetSize(width, height int) requestModel {
 	m.width, m.height = width, height
-	innerWidth := width - 4   // rounded border + horizontal padding
-	innerHeight := height - 3 // border rows (2) + fixed env line (1)
-	if innerWidth < 0 {
-		innerWidth = 0
-	}
-	if innerHeight < 0 {
-		innerHeight = 0
-	}
+	innerWidth := max(0, width-paneFocusedStyle.GetHorizontalFrameSize())
+	innerHeight := max(0, height-paneFocusedStyle.GetVerticalFrameSize()-3) // env, summary and status lines
 	m.viewport.Width = innerWidth
 	m.viewport.Height = innerHeight
 	m.editor.SetWidth(innerWidth)
-	// -1: the focused cursor line's nested ANSI styling makes the outer
-	// bordered pane style mis-measure that one line's width, wrapping it
-	// onto an extra row and pushing the header off-screen at exactly
-	// innerHeight. Reserving one row avoids ever hitting that edge.
-	m.editor.SetHeight(innerHeight - 1)
+	m.editor.SetHeight(innerHeight)
 	m.refreshContent()
 	return m
 }
@@ -187,7 +205,7 @@ func (m requestModel) SetSize(width, height int) requestModel {
 // request block ("METHOD URL\nHeader-Name: value\n...\n\n<body>"), used to
 // seed the raw-text edit buffer. It mirrors the request-rendering portion of
 // buildContent but produces plain text with no ANSI/lipgloss styling, since
-// this text is edited by hand and then reparsed by httpfile.Parse.
+// this text is edited by hand and then reparsed by httpfile.ParseVerbatimBody.
 func serializeRequest(req httpfile.Request) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", req.Method, req.URL)
@@ -205,6 +223,7 @@ func serializeRequest(req httpfile.Request) string {
 // edits act on the final, variable-substituted values) and focuses it.
 func (m requestModel) startEditing() (requestModel, tea.Cmd) {
 	m.editor.SetValue(serializeRequest(m.resolved))
+	m.editSeed = m.editor.Value()
 	cmd := m.editor.Focus()
 	m.editing = true
 	m.editError = ""
@@ -218,12 +237,21 @@ func (m requestModel) cancelEditing() requestModel {
 	return m
 }
 
-// applyEdit reparses the edit buffer via httpfile.Parse and, on success,
-// replaces m.resolved and clears m.missingVars (the edited values are final,
-// not template placeholders needing resolution). On failure it stays in edit
-// mode with the buffer intact and sets m.editError.
+// applyEdit reparses the edit buffer via httpfile.ParseVerbatimBody and, on
+// success, replaces m.resolved with the edited text. A buffer identical to
+// the one startEditing seeded leaves the request untouched. Otherwise the
+// {{…}} placeholders already present in the seed stay literal, while each
+// newly typed one is resolved: {{$dynamic}} variables are generated and any
+// other placeholder is collected into m.missingVars so it blocks sending.
+// The seed came from already-resolved values, so `< path` lines are not
+// included again and the original Unsupported warnings carry over. On
+// failure it stays in edit mode with the buffer intact and sets m.editError.
 func (m requestModel) applyEdit() requestModel {
-	f, err := httpfile.Parse([]byte(m.editor.Value()))
+	value := m.editor.Value()
+	if value == m.editSeed {
+		return m.cancelEditing()
+	}
+	f, err := httpfile.ParseVerbatimBody([]byte(value))
 	if err != nil {
 		m.editError = err.Error()
 		return m
@@ -234,13 +262,17 @@ func (m requestModel) applyEdit() requestModel {
 	}
 
 	parsed := f.Requests[0]
-	m.resolved = httpfile.Request{
-		Method:  parsed.Method,
-		URL:     parsed.URL,
-		Headers: parsed.Headers,
-		Body:    parsed.Body,
+	edited := httpfile.Request{
+		Method:      parsed.Method,
+		URL:         parsed.URL,
+		Headers:     parsed.Headers,
+		Body:        parsed.Body,
+		Unsupported: m.resolved.Unsupported,
 	}
-	m.missingVars = nil
+	opts := m.resolveOptions()
+	opts.BaseDir = ""
+	m.resolved, m.missingVars = resolveNewPlaceholders(m.editSeed, m.missingVars, value, edited, opts)
+	m.edited = true
 	m.editing = false
 	m.editError = ""
 	m.editor.Blur()
@@ -248,28 +280,156 @@ func (m requestModel) applyEdit() requestModel {
 	return m
 }
 
+// resolveNewPlaceholders resolves req like env.ResolveRequest with no vars,
+// except that placeholders already present in seed stay verbatim: in each of
+// the URL, the header values and the body, the first n occurrences of a token
+// are hidden behind sentinels and restored afterwards, where n is how often
+// that exact token appears in the same part of seed. Tokens whose names are
+// in blocked (the pre-edit missing list) are never hidden, and a blocked
+// missing-file entry is kept while its `< path` line is still in the body.
+// buffer is the text req was parsed from.
+func resolveNewPlaceholders(seed string, blocked []string, buffer string, req httpfile.Request, opts env.ResolveOptions) (httpfile.Request, []string) {
+	blockedSet := map[string]bool{}
+	for _, name := range blocked {
+		blockedSet[name] = true
+	}
+	count := func(texts ...string) map[string]int {
+		n := map[string]int{}
+		for _, text := range texts {
+			env.ReplacePlaceholders(text, func(tok, name string) string {
+				if !blockedSet[name] {
+					n[tok]++
+				}
+				return tok
+			})
+		}
+		return n
+	}
+	var urlLit, headerLit, bodyLit map[string]int
+	if f, err := httpfile.ParseVerbatimBody([]byte(seed)); err == nil && len(f.Requests) == 1 {
+		s := f.Requests[0]
+		values := make([]string, len(s.Headers))
+		for i, h := range s.Headers {
+			values[i] = h.Value
+		}
+		urlLit, headerLit, bodyLit = count(s.URL), count(values...), count(s.Body)
+	}
+
+	// The leading "{{" keeps EnsureScheme from prefixing a URL that starts with
+	// a literal placeholder; U+E000 is never generated, so checking buffer alone
+	// rules out a collision with user text.
+	prefix := "{{\uE000"
+	for n := 0; strings.Contains(buffer, prefix); n++ {
+		prefix = fmt.Sprintf("{{\uE000%d\uE000", n)
+	}
+	var pairs []string
+	hide := func(text string, literal map[string]int) string {
+		return env.ReplacePlaceholders(text, func(tok, _ string) string {
+			if literal[tok] == 0 {
+				return tok
+			}
+			literal[tok]--
+			sentinel := fmt.Sprintf("%s%d\uE001}}", prefix, len(pairs)/2)
+			pairs = append(pairs, sentinel, tok)
+			return sentinel
+		})
+	}
+	masked := req
+	masked.URL = hide(req.URL, urlLit)
+	masked.Headers = slices.Clone(req.Headers)
+	for i := range masked.Headers {
+		masked.Headers[i].Value = hide(masked.Headers[i].Value, headerLit)
+	}
+	masked.Body = hide(req.Body, bodyLit)
+
+	resolved, missing := env.ResolveRequest(masked, nil, opts)
+	restore := strings.NewReplacer(pairs...)
+	resolved.URL = restore.Replace(resolved.URL)
+	for i := range resolved.Headers {
+		resolved.Headers[i].Value = restore.Replace(resolved.Headers[i].Value)
+	}
+	resolved.Body = restore.Replace(resolved.Body)
+
+	included := env.IncludePaths(req.Body)
+	for _, entry := range blocked {
+		path, ok := strings.CutPrefix(entry, env.MissingFilePrefix)
+		if ok && slices.Contains(included, path) && !slices.Contains(missing, entry) {
+			missing = append(missing, entry)
+		}
+	}
+	return resolved, missing
+}
+
 func (m requestModel) isEditing() bool { return m.editing }
 
-func (m requestModel) sendCmd() tea.Cmd {
+func (m requestModel) withTimeout(d time.Duration) requestModel {
+	m.timeout = d
+	return m
+}
+
+func (m requestModel) sendTimeout() time.Duration {
+	if m.timeout <= 0 {
+		return defaultRequestTimeout
+	}
+	return m.timeout
+}
+
+func describeSendError(err error, timeout time.Duration) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("timed out after %s (use -timeout to change)", timeout)
+	}
+	return err.Error()
+}
+
+// startSend marks the model as executing, scrolls to the response area and
+// returns the command that performs the send. Callers check canSend first.
+func (m requestModel) startSend() (requestModel, tea.Cmd) {
+	m.executing = true
+	m.sendStarted = time.Now()
+	m.refreshContent()
+	m.scrollToResponse()
+	cmd := tea.Batch(m.sendCmd(), m.spinner.Tick)
+	return m, cmd
+}
+
+func (m requestModel) isSending() bool { return m.executing }
+
+func (m *requestModel) sendCmd() tea.Cmd {
 	resolved := m.resolved
+	timeout := m.sendTimeout()
 	store := m.store
+	id := m.id
+	name := m.req.Name
+	envName := m.currentEnv()
+	if envName == "" {
+		envName = m.entryEnv
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
 	return func() tea.Msg {
-		resp, err := executor.Execute(context.Background(), resolved, requestTimeout)
+		defer cancel()
+		resp, err := executor.Execute(ctx, resolved, timeout)
 
 		entry := history.Entry{
 			Method:         resolved.Method,
 			URL:            resolved.URL,
 			RequestHeaders: resolved.Headers,
 			RequestBody:    resolved.Body,
+			Env:            envName,
+			Name:           name,
 		}
 		if err != nil {
-			entry.Error = err.Error()
+			entry.Error = describeSendError(err, timeout)
 		} else {
 			entry.StatusCode = resp.StatusCode
 			entry.Status = resp.Status
 			entry.ResponseHeaders = resp.Headers
 			entry.ResponseBody = string(resp.Body)
 			entry.Duration = resp.Duration
+			entry.Redirects = resp.Redirects
 		}
 
 		var historyWarn string
@@ -279,18 +439,26 @@ func (m requestModel) sendCmd() tea.Cmd {
 			historyWarn = "could not save to history: " + storeErr.Error()
 		}
 
-		return execResultMsg{entry: entry, historyWarn: historyWarn}
+		return execResultMsg{modelID: id, entry: entry, historyWarn: historyWarn}
 	}
 }
 
 func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case execResultMsg:
+		if msg.modelID != m.id {
+			return m, nil
+		}
 		m.executing = false
+		m.cancel = nil
 		entry := msg.entry
 		m.lastEntry = &entry
 		m.historyWarn = msg.historyWarn
-		m.refreshContent()
+		if m.edited {
+			m.refreshContent()
+		} else {
+			m.recompute()
+		}
 		m.scrollToResponse()
 		return m, nil
 	case clipboardCopyMsg:
@@ -304,12 +472,23 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 			m.copyStatus = "copied to clipboard"
 		}
 		return m, clearCopyStatusAfter(msg.token)
+	case spinner.TickMsg:
+		if !m.executing {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case clipboardCopyExpiredMsg:
 		if msg.token == m.copyToken {
 			m.copyStatus = ""
 		}
 		return m, nil
 	case tea.KeyMsg:
+		m.blockedFlash = false
+		if !key.Matches(msg, keys.CycleEnv) {
+			m.discardArmed = false
+		}
 		if m.editing {
 			switch {
 			case key.Matches(msg, keys.CancelEdit):
@@ -326,24 +505,44 @@ func (m requestModel) Update(msg tea.Msg) (requestModel, tea.Cmd) {
 		case key.Matches(msg, keys.Edit):
 			return m.startEditing()
 		case key.Matches(msg, keys.CycleEnv):
-			if len(m.envNames) > 0 {
-				m.envIndex = (m.envIndex + 1) % len(m.envNames)
-				m.recompute()
-			}
-			return m, nil
-		case key.Matches(msg, keys.Send):
-			if m.executing || len(m.missingVars) > 0 {
+			if !m.canCycleEnv() {
 				return m, nil
 			}
-			m.executing = true
-			m.refreshContent()
-			m.scrollToResponse()
-			return m, m.sendCmd()
+			if m.edited && !m.discardArmed {
+				m.discardArmed = true
+				return m, nil
+			}
+			m.discardArmed = false
+			m.edited = false
+			m.envIndex = (m.envIndex + 1) % len(m.envNames)
+			m.recompute()
+			return m, nil
+		case key.Matches(msg, keys.Send):
+			if m.executing {
+				return m, nil
+			}
+			if !m.canSend() {
+				m.blockedFlash = true
+				return m, nil
+			}
+			return m.startSend()
+		case key.Matches(msg, keys.Top):
+			m.viewport.GotoTop()
+			return m, nil
+		case key.Matches(msg, keys.Bottom):
+			m.viewport.GotoBottom()
+			return m, nil
 		case key.Matches(msg, keys.Copy):
 			m.copyToken++
 			return m, copyToClipboardCmd(m.copyText(), m.copyToken)
 		case key.Matches(msg, keys.Back):
-			return m, func() tea.Msg { return backToBrowserMsg{} }
+			if m.executing {
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, nil
+			}
+			return m, func() tea.Msg { return backFromRequestMsg{} }
 		}
 	}
 
@@ -368,24 +567,29 @@ func (m requestModel) copyText() string {
 	default:
 		resp = responseFromEntry(*m.lastEntry)
 	}
-	return output.RenderTransaction(m.resolved, resp, note, output.Options{Color: false})
+	req := m.resolved
+	if !m.executing && m.lastEntry != nil {
+		req.Method, req.URL = m.lastEntry.Method, m.lastEntry.URL
+		req.Headers, req.Body = m.lastEntry.RequestHeaders, m.lastEntry.RequestBody
+	}
+	return output.RenderTransaction(req, resp, note, output.Options{Color: false})
 }
 
 func (m requestModel) buildContent() (string, int) {
 	var head strings.Builder
 
-	fmt.Fprintf(&head, "%s %s\n", m.resolved.Method, m.resolved.URL)
+	if line := unsupportedLine(m.resolved.Unsupported); line != "" {
+		head.WriteString(warnTextStyle.Render(line))
+		head.WriteString("\n")
+	}
+	method := output.Sanitize(m.resolved.Method)
+	fmt.Fprintf(&head, "%s %s\n", methodStyle(method).Render(method), output.Sanitize(m.resolved.URL))
 	for _, h := range m.resolved.Headers {
-		fmt.Fprintf(&head, "%s: %s\n", h.Name, h.Value)
+		fmt.Fprintf(&head, "%s: %s\n", output.Sanitize(h.Name), output.Sanitize(h.Value))
 	}
 	if m.resolved.Body != "" {
 		head.WriteString("\n")
-		head.WriteString(output.PrettyBody([]byte(m.resolved.Body), output.Options{Color: true}))
-		head.WriteString("\n")
-	}
-	if len(m.missingVars) > 0 {
-		head.WriteString("\n")
-		head.WriteString(errorTextStyle.Render("unresolved variables: " + strings.Join(m.missingVars, ", ")))
+		head.WriteString(output.PrettyBody([]byte(output.Sanitize(m.resolved.Body)), output.Options{Color: true}))
 		head.WriteString("\n")
 	}
 
@@ -401,11 +605,17 @@ func (m requestModel) buildContent() (string, int) {
 	switch {
 	case m.executing:
 		tail.WriteString("Sending request...")
+	case m.lastEntry == nil && !m.canSend():
+		tail.WriteString(mutedTextStyle.Render("(not yet sent)"))
 	case m.lastEntry == nil:
 		tail.WriteString(mutedTextStyle.Render("(not yet sent — press enter to send)"))
 	case m.lastEntry.Error != "":
-		tail.WriteString(errorTextStyle.Render("Error: " + m.lastEntry.Error))
+		tail.WriteString(errorTextStyle.Render("Error: " + output.Sanitize(m.lastEntry.Error)))
 	default:
+		if cur := m.currentEnv(); cur != "" && m.lastEntry.Env != cur {
+			tail.WriteString(mutedTextStyle.Render("(sent with env: " + output.Sanitize(m.lastEntry.Env) + ")"))
+			tail.WriteString("\n")
+		}
 		tail.WriteString(output.RenderResponse(responseFromEntry(*m.lastEntry), output.Options{Color: true}))
 	}
 
@@ -418,10 +628,73 @@ func (m requestModel) buildContent() (string, int) {
 }
 
 func (m requestModel) envLine() string {
-	if len(m.envNames) == 0 {
-		return mutedTextStyle.Render("no environment file found")
+	line := m.untruncatedEnvLine()
+	if m.viewport.Width > 0 {
+		line = ansi.Truncate(line, m.viewport.Width, "…")
 	}
-	return fmt.Sprintf("env: %s (%d/%d) — press e to cycle", m.envNames[m.envIndex], m.envIndex+1, len(m.envNames))
+	return line
+}
+
+func (m requestModel) untruncatedEnvLine() string {
+	src := m.envSource
+	switch {
+	case m.fromEntry:
+		text := "resolved at send time"
+		if m.entryEnv != "" {
+			text += " (env: " + m.entryEnv + ")"
+		}
+		return mutedTextStyle.Render(text)
+	case m.envErr != nil:
+		return errorTextStyle.Render(dirLabel(m.root, src.Dir) + strings.ReplaceAll(m.envErr.Error(), "\n", " "))
+	case src.Dir == "":
+		text := "no " + env.PublicFileName + " found"
+		if len(src.Searched) > 0 {
+			labels := make([]string, len(src.Searched))
+			for i, dir := range src.Searched {
+				labels[i] = dirLabel(m.root, dir)
+			}
+			text += " (searched: " + strings.Join(labels, ", ") + ")"
+		}
+		return mutedTextStyle.Render(text)
+	}
+	file := dirLabel(m.root, src.Dir) + src.FileName()
+	if len(m.envNames) == 0 {
+		return "env: (none) · " + file
+	}
+	line := fmt.Sprintf("env: %s (%d/%d) · %s", m.envNames[m.envIndex], m.envIndex+1, len(m.envNames), file)
+	if m.canCycleEnv() {
+		line += " — e cycle"
+	}
+	return m.envLineStyle().Render(line)
+}
+
+// currentEnv is the selected env name, or "" when no env is available.
+func (m requestModel) currentEnv() string {
+	if m.envIndex < 0 || m.envIndex >= len(m.envNames) {
+		return ""
+	}
+	return m.envNames[m.envIndex]
+}
+
+func (m requestModel) envLineStyle() lipgloss.Style {
+	if strings.Contains(strings.ToLower(m.currentEnv()), "prod") {
+		return warnTextStyle
+	}
+	return lipgloss.NewStyle()
+}
+
+func (m requestModel) canCycleEnv() bool { return len(m.envNames) > 1 }
+
+func dirLabel(root, dir string) string {
+	if root != "" {
+		if rel, err := filepath.Rel(root, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel == "." {
+				return "./"
+			}
+			return filepath.ToSlash(rel) + "/"
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(dir)) + "/"
 }
 
 func (m requestModel) title() string {
@@ -431,22 +704,108 @@ func (m requestModel) title() string {
 	return m.req.Method + " " + m.req.URL
 }
 
-func (m requestModel) View() string {
-	var content string
-	if m.editing {
-		content = m.envLine() + "\n" + m.editor.View()
-		if m.editError != "" {
-			content += "\n" + errorTextStyle.Render(m.editError)
+func (m requestModel) canSend() bool { return len(m.missingVars) == 0 }
+
+func (m requestModel) blockedMessage() string {
+	hint := "i edit"
+	if m.canCycleEnv() {
+		hint = "e switch env · " + hint
+	}
+	return "cannot send: " + describeUnresolved(m.missingVars) + " — " + hint
+}
+
+func (m requestModel) statusLine() string {
+	var text string
+	var style lipgloss.Style
+	switch {
+	case m.editing:
+		text, style = m.editError, errorTextStyle
+	case m.discardArmed:
+		text, style = "edits will be discarded — press e again", warnTextStyle
+	case m.blockedFlash:
+		text, style = m.blockedMessage(), blockedHighlightStyle
+	case m.copyStatus != "":
+		text, style = m.copyStatus, copiedTextStyle
+		if m.copyErr {
+			style = errorTextStyle
 		}
-	} else {
-		content = m.envLine() + "\n" + m.viewport.View()
-		if m.copyStatus != "" {
-			style := copiedTextStyle
-			if m.copyErr {
-				style = errorTextStyle
-			}
-			content += "\n" + style.Render(m.copyStatus)
+	case !m.canSend():
+		text, style = m.blockedMessage(), errorTextStyle
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	w := m.viewport.Width
+	if m.editing || m.viewport.TotalLineCount() <= m.viewport.Height {
+		if text == "" {
+			return ""
+		}
+		return style.Render(ansi.Truncate(text, w, "…"))
+	}
+	pct := fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
+	msg := ""
+	if text != "" {
+		msg = style.Render(ansi.Truncate(text, max(0, w-len(pct)-1), "…"))
+	}
+	pad := max(1, w-ansi.StringWidth(msg)-len(pct))
+	return msg + strings.Repeat(" ", pad) + mutedTextStyle.Render(pct)
+}
+
+func (m requestModel) summaryLine() string {
+	w := m.viewport.Width
+	switch {
+	case m.executing:
+		elapsed := time.Since(m.sendStarted).Truncate(100 * time.Millisecond)
+		return ansi.Truncate(fmt.Sprintf("%s sending… %s · esc cancel", m.spinner.View(), elapsed), w, "…")
+	case m.lastEntry == nil:
+		return mutedTextStyle.Render("not sent")
+	case m.lastEntry.Error != "":
+		text := "ERR · " + output.Sanitize(strings.ReplaceAll(m.lastEntry.Error, "\n", " "))
+		return errorTextStyle.Render(ansi.Truncate(text, w, "…"))
+	}
+	e := m.lastEntry
+	status := output.Sanitize(e.Status)
+	rest := fmt.Sprintf(" · %s · %s", e.Duration.Round(time.Millisecond), formatSize(len(e.ResponseBody)))
+	return ansi.Truncate(statusCodeStyle(e.StatusCode).Render(status)+rest, w, "…")
+}
+
+func (m requestModel) View() string {
+	body := m.viewport.View()
+	if m.editing {
+		body = m.editor.View()
+	}
+	content := ansi.Truncate(m.envLine(), m.viewport.Width, "…") + "\n" + m.summaryLine() + "\n" + body + "\n" + m.statusLine()
+	return paneFocusedStyle.Width(max(0, m.width-paneFocusedStyle.GetHorizontalBorderSize())).Render(content)
+}
+
+func describeUnresolved(missing []string) string {
+	var vars, files []string
+	for _, entry := range missing {
+		entry = output.Sanitize(entry)
+		if strings.HasPrefix(entry, env.MissingFilePrefix) {
+			files = append(files, entry)
+		} else {
+			vars = append(vars, "{{"+entry+"}}")
 		}
 	}
-	return paneFocusedStyle.Width(m.width - 4).Render(content)
+	var parts []string
+	if len(vars) > 0 {
+		parts = append(parts, "unresolved "+strings.Join(vars, ", "))
+	}
+	parts = append(parts, files...)
+	return strings.Join(parts, "; ")
+}
+
+func unsupportedLine(items []string) string {
+	seen := make(map[string]bool, len(items))
+	var uniq []string
+	for _, item := range items {
+		item = output.Sanitize(item)
+		if !seen[item] {
+			seen[item] = true
+			uniq = append(uniq, item)
+		}
+	}
+	if len(uniq) == 0 {
+		return ""
+	}
+	return "unsupported (ignored): " + strings.Join(uniq, ", ")
 }

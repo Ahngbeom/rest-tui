@@ -31,6 +31,10 @@ type openRequestFromEntryMsg struct {
 // backToBrowserMsg asks the app to return to the Browser screen.
 type backToBrowserMsg struct{}
 
+// backFromRequestMsg asks the app to leave the Request view and return to the
+// screen it was opened from.
+type backFromRequestMsg struct{}
+
 // openHistoryMsg asks the app to switch to the History screen.
 type openHistoryMsg struct{}
 
@@ -39,6 +43,7 @@ type openHistoryMsg struct{}
 // entry.Error rather than as a separate error, since a failed send is still a
 // history-worthy event.
 type execResultMsg struct {
+	modelID     uint64
 	entry       history.Entry
 	historyWarn string
 }

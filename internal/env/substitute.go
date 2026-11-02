@@ -5,18 +5,27 @@ import (
 	"sort"
 )
 
-var placeholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}`)
+var placeholderRE = regexp.MustCompile(`\{\{\s*(\$?[A-Za-z_][A-Za-z0-9_.-]*(?:\([^(){}]*\))?)\s*\}\}`)
 
 // Substitute replaces every {{name}} placeholder in text with vars[name].
 // Placeholders with no matching entry in vars are left untouched in the
 // result, and their names are returned (sorted, de-duplicated) in missing so
 // the caller can fail fast instead of sending a partially-substituted request.
 func Substitute(text string, vars map[string]string) (result string, missing []string) {
+	return substituteFunc(text, func(name string) (string, bool) {
+		v, ok := vars[name]
+		return v, ok
+	})
+}
+
+// substituteFunc is Substitute with the value lookup supplied by the caller.
+// lookup is called once per placeholder occurrence, left to right.
+func substituteFunc(text string, lookup func(name string) (string, bool)) (result string, missing []string) {
 	missingSet := map[string]bool{}
 
 	result = placeholderRE.ReplaceAllStringFunc(text, func(match string) string {
 		name := placeholderRE.FindStringSubmatch(match)[1]
-		if v, ok := vars[name]; ok {
+		if v, ok := lookup(name); ok {
 			return v
 		}
 		missingSet[name] = true
@@ -32,4 +41,13 @@ func Substitute(text string, vars map[string]string) (result string, missing []s
 	}
 	sort.Strings(missing)
 	return result, missing
+}
+
+// ReplacePlaceholders returns text with every placeholder Substitute would
+// see replaced by fn(token, name), where token is the whole match including
+// braces and name is what Substitute would look up.
+func ReplacePlaceholders(text string, fn func(token, name string) string) string {
+	return placeholderRE.ReplaceAllStringFunc(text, func(match string) string {
+		return fn(match, placeholderRE.FindStringSubmatch(match)[1])
+	})
 }

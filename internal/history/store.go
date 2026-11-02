@@ -3,15 +3,19 @@
 package history
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Ahngbeom/rest-tui/internal/httpfile"
 )
+
+const maxEntries = 500
 
 // Entry is one recorded execution.
 type Entry struct {
@@ -29,6 +33,47 @@ type Entry struct {
 	// Error holds the execution failure message, if the request could not
 	// be completed (network error, timeout, etc).
 	Error string
+	// Env is the env name the request was sent with; empty when none was selected.
+	Env string `json:"Env,omitempty"`
+	// Name is the request name (the "### name" line); empty when unnamed.
+	Name string `json:",omitempty"`
+	// Redirects lists the redirect hops followed before the final response.
+	Redirects []string `json:",omitempty"`
+}
+
+type entryAlias Entry
+
+// entryJSON is Entry's on-disk form. A RequestBody that is not valid UTF-8
+// (an included binary file) would be mangled to U+FFFD by encoding/json, so
+// it is stored in RequestBodyBase64 instead and reruns send the exact bytes.
+type entryJSON struct {
+	entryAlias
+	RequestBodyBase64 string `json:",omitempty"`
+}
+
+func (e Entry) MarshalJSON() ([]byte, error) {
+	j := entryJSON{entryAlias: entryAlias(e)}
+	if !utf8.ValidString(e.RequestBody) {
+		j.RequestBodyBase64 = base64.StdEncoding.EncodeToString([]byte(e.RequestBody))
+		j.RequestBody = ""
+	}
+	return json.Marshal(j)
+}
+
+func (e *Entry) UnmarshalJSON(data []byte) error {
+	var j entryJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	if j.RequestBodyBase64 != "" {
+		body, err := base64.StdEncoding.DecodeString(j.RequestBodyBase64)
+		if err != nil {
+			return fmt.Errorf("RequestBodyBase64: %w", err)
+		}
+		j.RequestBody = string(body)
+	}
+	*e = Entry(j.entryAlias)
+	return nil
 }
 
 // Store reads and appends Entry records to a JSON file on disk.
@@ -83,6 +128,9 @@ func (s *Store) Append(e Entry) (Entry, error) {
 		e.ID = fmt.Sprintf("%s-%04d", e.Timestamp.UTC().Format("20060102T150405.000000000"), len(entries))
 	}
 	entries = append(entries, e)
+	if len(entries) > maxEntries {
+		entries = entries[len(entries)-maxEntries:]
+	}
 
 	if err := s.save(entries); err != nil {
 		return Entry{}, err
@@ -153,12 +201,35 @@ func (s *Store) load() ([]Entry, error) {
 }
 
 func (s *Store) save(entries []Entry) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
