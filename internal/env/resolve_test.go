@@ -123,8 +123,18 @@ func TestResolveRequest_IncludesBodyFileRelativeToBaseDir(t *testing.T) {
 	writeFile(t, dir, "body.json", "{\"a\": 1}\n")
 	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./body.json"}
 	got, missing := ResolveRequest(req, nil, testResolveOptions(dir))
-	if got.Body != `{"a": 1}` || len(missing) != 0 {
+	if got.Body != "{\"a\": 1}\n" || len(missing) != 0 {
 		t.Errorf("Body = %q, missing = %v", got.Body, missing)
+	}
+}
+
+func TestResolveRequest_WholeBodyIncludeKeepsTrailingCRLF(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "data.ndjson", "{\"a\":1}\r\n{\"b\":2}\r\n")
+	req := httpfile.Request{Method: "POST", URL: "https://example.com", Body: "< ./data.ndjson"}
+	got, _ := ResolveRequest(req, nil, testResolveOptions(dir))
+	if want := "{\"a\":1}\r\n{\"b\":2}\r\n"; got.Body != want {
+		t.Errorf("Body = %q, want %q", got.Body, want)
 	}
 }
 

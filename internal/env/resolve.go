@@ -94,9 +94,11 @@ func ResolveRequest(req httpfile.Request, vars map[string]string, opts ResolveOp
 	return resolved, append(missing, missingFiles...)
 }
 
-// includeFiles replaces each `< path` line of body with the file's contents,
-// dropping one trailing newline. Unreadable files leave the line untouched and
-// are reported as MissingFilePrefix+path, de-duplicated in body order.
+// includeFiles replaces each `< path` line of body with the file's contents.
+// A file followed by more body lines loses one trailing newline, since the
+// line join already supplies it; the last line keeps the file's bytes.
+// Unreadable files leave the line untouched and are reported as
+// MissingFilePrefix+path, de-duplicated in body order.
 func includeFiles(body, baseDir string) (string, []string) {
 	lines := strings.Split(body, "\n")
 	var missing []string
@@ -119,10 +121,12 @@ func includeFiles(body, baseDir string) (string, []string) {
 			continue
 		}
 		content := string(data)
-		if strings.HasSuffix(content, "\r\n") {
-			content = content[:len(content)-2]
-		} else {
-			content = strings.TrimSuffix(content, "\n")
+		if i < len(lines)-1 {
+			if strings.HasSuffix(content, "\r\n") {
+				content = content[:len(content)-2]
+			} else {
+				content = strings.TrimSuffix(content, "\n")
+			}
 		}
 		lines[i] = content
 	}
